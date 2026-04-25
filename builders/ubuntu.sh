@@ -83,6 +83,16 @@ sudo rm -rf "$ROOTFS/usr/share/man"
 
 echo "[+] Building OCI image with buildah"
 
+# overlay-on-overlayfs (WSL2, containers) requires fuse-overlayfs; fall back to vfs
+sudo mkdir -p /etc/containers
+if command -v fuse-overlayfs &>/dev/null; then
+  printf '[storage]\ndriver = "overlay"\n\n[storage.options.overlay]\nmount_program = "/usr/bin/fuse-overlayfs"\n' \
+    | sudo tee /etc/containers/storage.conf > /dev/null
+else
+  printf '[storage]\ndriver = "vfs"\n' \
+    | sudo tee /etc/containers/storage.conf > /dev/null
+fi
+
 container=$(sudo buildah from scratch)
 
 sudo buildah add $container "$ROOTFS" /

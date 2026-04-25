@@ -97,19 +97,20 @@ jobs:
       - name: Install apko (Alpine only)
         if: startsWith(matrix.image, 'alpine')
         run: |
-          GOLANG_VERSION=1.26.1
-          GOLANG_FILE=go${GOLANG_VERSION}.linux-amd64.tar.gz
-          curl -sfL "https://go.dev/dl/${GOLANG_FILE}" -o "${GOLANG_FILE}"
-          echo "031f088e5d955bab8657ede27ad4e3bc5b7c1ba281f05f245bcc304f327c987a ${GOLANG_FILE}" | sha256sum -c
-          sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf "${GOLANG_FILE}"
-          export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
-          go install chainguard.dev/apko@861f83f69e6fa9114405a2f7bb5cf6585ad00421
+          APKO_VERSION=1.2.7
+          APKO_FILE="apko_${APKO_VERSION}_linux_amd64.tar.gz"
+          curl -sfL "https://github.com/chainguard-dev/apko/releases/download/v${APKO_VERSION}/${APKO_FILE}" \
+            -o "${APKO_FILE}"
+          echo "5151b4a79e9a7fd495d5f7591cb25293b747bc9e4eb5929643ba80701bfa8153 ${APKO_FILE}" | sha256sum -c
+          sudo tar -C . -xzf "${APKO_FILE}" apko_${APKO_VERSION}_linux_amd64/apko
+          sudo cp apko_${APKO_VERSION}_linux_amd64/apko /usr/local/bin/apko
+          sudo chmod +x /usr/local/bin/apko
 
       - name: Install Ubuntu build tools
         if: startsWith(matrix.image, 'ubuntu')
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends debootstrap buildah
+          sudo apt-get install -y --no-install-recommends debootstrap buildah fuse-overlayfs
 
       - name: Build image
         run: |
