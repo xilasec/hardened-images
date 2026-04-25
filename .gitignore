@@ -1,0 +1,25 @@
+*.log
+.DS_Store
+Thumbs.db
+.env
+.env.local
+*.tar
+sbom-*.json
+*.grype.json
+dist/
+!pkg/.gitkeep
+pkg/*
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+tmp/
+*.tmp
+
+# Coverage
+coverage/
+
+# Cache
+.cache/

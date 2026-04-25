@@ -1,0 +1,33 @@
+name: ubuntu-gpu
+version: noble
+
+arch: amd64
+
+mirror: https://security.ubuntu.com/ubuntu/
+
+# local-packages:
+#   - libc6_2.39-0ubuntu8.7
+#   - libc-bin_2.39-0ubuntu8.7
+#   - openssl_3.0.13-0ubuntu3.7
+#   - libssl3t64_3.0.13-0ubuntu3.7
+
+packages:
+  - ca-certificates
+  - libstdc++6
+  - libgcc-s1
+  - coreutils
+
+environment:
+  NVIDIA_VISIBLE_DEVICES: all
+  NVIDIA_DRIVER_CAPABILITIES: compute,utility
+
+entrypoint:
+  uid: 1000
+  command: /bin/false
+
+accounts:
+  users:
+    - username: appuser
+      uid: 1000
+      groups:
+        - { groupname: "appuser", gid: 1000 }

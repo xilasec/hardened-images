@@ -1,0 +1,162 @@
+name: Build Hardened Images
+
+on:
+  workflow_dispatch:
+  # Enable this when we have a good base
+  # schedule:
+    # - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [alpine-balanced, ubuntu-noble]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set build date
+        run: echo "DATE=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
+
+      - name: Install cosign
+        run: |
+          COSIGN_VERSION=3.0.5
+          sudo curl -sfL "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64" \
+            -o /usr/local/bin/cosign
+          echo "db15cc99e6e4837daabab023742aaddc3841ce57f193d11b7c3e06c8003642b2 /usr/local/bin/cosign" | sha256sum -c
+          sudo chmod +x /usr/local/bin/cosign
+
+      - name: Install syft
+        run: |
+          SYFT_VERSION=1.42.3
+          SYFT_FILE="syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          SYFT_BASE_URL="https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/"
+          curl -sfL "${SYFT_BASE_URL}${SYFT_FILE}" -o "${SYFT_FILE}"
+          echo "0d6be741479eddd2c8644a288990c04f3df0d609bbc1599a005532a9dff63509 ${SYFT_FILE}" | sha256sum -c
+          curl -sfL "${SYFT_BASE_URL}syft_${SYFT_VERSION}_checksums.txt.pem" -o checksums.txt.pem
+          echo "497aaaaec5b69edcb6dc426f97d7c8c5c28d8508bb550c917a084d8182d3af86 checksums.txt.pem" | sha256sum -c
+          curl -sfL "${SYFT_BASE_URL}syft_${SYFT_VERSION}_checksums.txt.sig" -o checksums.txt.sig
+          echo "349538abda800891805ed16de07d2cb98a0c04d8493b69893f7b224f45e5b423 checksums.txt.sig" | sha256sum -c
+          curl -sfL "${SYFT_BASE_URL}syft_${SYFT_VERSION}_checksums.txt" -o checksums.txt
+          echo "3c4a66ddb6e0689fac2be19247064f6053e2a2746035dfbcef8609baa9088f92 checksums.txt" | sha256sum -c
+          cosign verify-blob ./checksums.txt \
+            --certificate ./checksums.txt.pem \
+            --signature ./checksums.txt.sig \
+            --certificate-identity-regexp 'https://github\.com/anchore/syft/\.github/workflows/.+' \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+          sudo tar -C /usr/local/bin -xzf "${SYFT_FILE}" syft
+          sudo chmod +x /usr/local/bin/syft
+
+      - name: Install grype
+        run: |
+          GRYPE_VERSION=0.110.0
+          GRYPE_FILE="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          GRYPE_BASE_URL="https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/"
+          curl -sfL "${GRYPE_BASE_URL}${GRYPE_FILE}" -o "${GRYPE_FILE}"
+          echo "aaa98d27d2d7efd9317c6a1ad6d9b15f3e65bab320e7d03bde41e251387bb71c ${GRYPE_FILE}" | sha256sum -c
+          curl -sfL "${GRYPE_BASE_URL}grype_${GRYPE_VERSION}_checksums.txt.pem" -o checksums2.txt.pem
+          echo "953adf75e6a84ee1fa9c0062e50d3436400798bfc73963316ba9add27d97b5be checksums2.txt.pem" | sha256sum -c
+          curl -sfL "${GRYPE_BASE_URL}grype_${GRYPE_VERSION}_checksums.txt.sig" -o checksums2.txt.sig
+          echo "550f13a16ce278e464409f087ded03f80aeca8a3550212d763b43a2b0a0dfeb7 checksums2.txt.sig" | sha256sum -c
+          curl -sfL "${GRYPE_BASE_URL}grype_${GRYPE_VERSION}_checksums.txt" -o checksums2.txt
+          echo "210952ee17cafaf0636fea83e7049fe8c4f8503f4d7375ddd98b9defaf86ed34 checksums2.txt" | sha256sum -c
+          cosign verify-blob ./checksums2.txt \
+            --certificate ./checksums2.txt.pem \
+            --signature ./checksums2.txt.sig \
+            --certificate-identity-regexp 'https://github\.com/anchore/grype/\.github/workflows/.+' \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+          sudo tar -C /usr/local/bin -xzf "${GRYPE_FILE}" grype
+          sudo chmod +x /usr/local/bin/grype
+
+      - name: Install OPA
+        run: |
+          OPA_VERSION=1.15.0
+          sudo curl -sfL "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_amd64" \
+            -o /usr/local/bin/opa
+          echo "3a39bdd94d89652ad611258d15958902dc3e753ef17a8dfd11105a599a5aff1e /usr/local/bin/opa" | sha256sum -c
+          sudo chmod +x /usr/local/bin/opa
+
+      - name: Install dockle
+        run: |
+          DOCKLE_VERSION=0.4.15
+          DOCKLE_FILE="dockle_${DOCKLE_VERSION}_Linux-64bit.tar.gz"
+          curl -sfL "https://github.com/goodwithtech/dockle/releases/download/v${DOCKLE_VERSION}/${DOCKLE_FILE}" \
+            -o "${DOCKLE_FILE}"
+          echo "8bfc9183d1d3d67800edb45bea4bb63ddf1d28bec5f89944075a07007d79caad ${DOCKLE_FILE}" | sha256sum -c
+          sudo tar -C /usr/local/bin -xzf "${DOCKLE_FILE}" dockle
+          sudo chmod +x /usr/local/bin/dockle
+
+      - name: Install apko (Alpine only)
+        if: startsWith(matrix.image, 'alpine')
+        run: |
+          GOLANG_VERSION=1.26.1
+          GOLANG_FILE=go${GOLANG_VERSION}.linux-amd64.tar.gz
+          curl -sfL "https://go.dev/dl/${GOLANG_FILE}" -o "${GOLANG_FILE}"
+          echo "031f088e5d955bab8657ede27ad4e3bc5b7c1ba281f05f245bcc304f327c987a ${GOLANG_FILE}" | sha256sum -c
+          sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf "${GOLANG_FILE}"
+          export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
+          go install chainguard.dev/apko@861f83f69e6fa9114405a2f7bb5cf6585ad00421
+
+      - name: Install Ubuntu build tools
+        if: startsWith(matrix.image, 'ubuntu')
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends debootstrap buildah
+
+      - name: Build image
+        run: |
+          chmod +x scripts/build.sh builders/ubuntu.sh builders/alpine.sh
+          ./scripts/build.sh "${{ matrix.image }}" "${{ env.DATE }}"
+
+      - name: Generate SBOM
+        run: |
+          chmod +x scripts/sbom.sh
+          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
+          ./scripts/sbom.sh "$TAG" "dist/${{ matrix.image }}.tar"
+
+      - name: Scan image
+        run: |
+          chmod +x scripts/scan.sh
+          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
+          ./scripts/scan.sh "$TAG"
+
+      - name: Verify policy
+        run: |
+          chmod +x scripts/verify.sh
+          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
+          ./scripts/verify.sh "$TAG"
+
+      - name: Compliance check
+        run: |
+          chmod +x scripts/compliance.sh
+          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
+          ./scripts/compliance.sh "$TAG"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image
+        run: |
+          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
+          docker push "$TAG"
+          docker push "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:latest"
+
+      - name: Sign and attest
+        run: |
+          chmod +x scripts/sign.sh
+          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
+          ./scripts/sign.sh "$TAG"
+        env:
+          COSIGN_EXPERIMENTAL: "1"
