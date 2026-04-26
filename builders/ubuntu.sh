@@ -141,6 +141,13 @@ sudo find "$ROOTFS/bin" "$ROOTFS/sbin" "$ROOTFS/usr/bin" "$ROOTFS/usr/sbin" \
   -maxdepth 1 -type f \
   -exec strip --strip-unneeded {} + 2>/dev/null || true
 
+echo "[+] Clearing device nodes from rootfs"
+# debootstrap populates dev/ with real device nodes (console, null, urandom, …).
+# OCI image layers cannot store device files the runtime recreates /dev at
+# container startup from the runtime spec. Copying them with buildah add fails
+# with EPERM on runners that lack CAP_MKNOD (e.g. GitHub Actions ubuntu-slim).
+sudo find "$ROOTFS/dev" -maxdepth 1 \( -type b -o -type c \) -delete 2>/dev/null || true
+
 echo "[+] Building OCI image with buildah"
 
 # Pass storage driver as flags rather than writing /etc/containers/storage.conf,
