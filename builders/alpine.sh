@@ -10,7 +10,14 @@ rm -rf "$OUT"
 apko build "$CONFIG" "$TAG" "$OUT"
 
 echo "Executing podman to tag images"
-LOADED_TAG=$(sudo podman load < "$OUT" | sed -n 's/^Loaded image: //p')
-if [ -n "$LOADED_TAG" ] && [ "$LOADED_TAG" != "$TAG" ]; then
+LOAD_OUTPUT=$(sudo podman load < "$OUT")
+echo "Debug Load Output: $LOAD_OUTPUT"
+
+LOADED_TAG=$(echo "$LOAD_OUTPUT" | grep -oE 'Loaded image(s)?: \S+' | awk '{print $NF}')
+
+if [ -n "$LOADED_TAG" ]; then
   sudo podman tag "$LOADED_TAG" "$TAG"
+else
+  echo "Error Idk what happend."
+  exit 1
 fi
