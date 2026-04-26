@@ -171,7 +171,7 @@ jobs:
       - name: Build image
         if: env.SKIP_BUILD != 'true'
         run: |
-          chmod +x scripts/build.sh builders/ubuntu.sh builders/alpine.sh
+          chmod +x scripts/build.sh builders/*.sh
           echo "${{ secrets.MELANGE_SIGNING_KEY }}" > melange/xilasec@hardned-images.rsa
           chmod 600 melange/xilasec@hardned-images.rsa
           ./scripts/build.sh "${{ matrix.image }}" "${{ env.DATE }}"
