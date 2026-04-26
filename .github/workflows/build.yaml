@@ -139,7 +139,7 @@ jobs:
         if: startsWith(matrix.image, 'alpine') && env.SKIP_BUILD != 'true'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends buildah fuse-overlayfs podman
+          sudo apt-get install -y --no-install-recommends buildah fuse-overlayfs
 
       - name: Install apko + melange (Alpine only)
         if: startsWith(matrix.image, 'alpine') && env.SKIP_BUILD != 'true'

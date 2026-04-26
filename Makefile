@@ -14,7 +14,7 @@ endif
 
 build:
 	sudo rm -rf tmp
-	./scripts/build.sh $(BUILD) $(DATE)
+	./scripts/build.sh $(BUILD) $(DATE) $(BSTORE)
 
 sbom:
 	./scripts/sbom.sh $(IMAGE) $(TAR)
