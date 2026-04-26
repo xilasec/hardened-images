@@ -26,7 +26,31 @@ jobs:
       - name: Set build date
         run: echo "DATE=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
 
+      - name: Check if already published
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          IMAGE="${{ matrix.image }}"
+          TAG="${{ env.DATE }}"
+          GHCR_TOKEN=$(curl -sf \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://ghcr.io/token?scope=repository:${OWNER}/${IMAGE}:pull&service=ghcr.io" \
+            | jq -r '.token // empty' || true)
+          if [ -z "$GHCR_TOKEN" ]; then
+            echo "Could not get GHCR token (first publish?), proceeding with build"
+            exit 0
+          fi
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${GHCR_TOKEN}" \
+            "https://ghcr.io/v2/${OWNER}/${IMAGE}/manifests/${TAG}" || echo "0")
+          if [ "$STATUS" = "200" ]; then
+            echo "Image ${IMAGE}:${TAG} already published, skipping build"
+            echo "SKIP_BUILD=true" >> "$GITHUB_ENV"
+          else
+            echo "Image ${IMAGE}:${TAG} not found (status ${STATUS}), proceeding with build"
+          fi
+
       - name: Install cosign
+        if: env.SKIP_BUILD != 'true'
         run: |
           COSIGN_VERSION=3.0.5
           sudo curl -sfL "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64" \
@@ -35,6 +59,7 @@ jobs:
           sudo chmod +x /usr/local/bin/cosign
 
       - name: Install syft
+        if: env.SKIP_BUILD != 'true'
         run: |
           SYFT_VERSION=1.42.3
           SYFT_FILE="syft_${SYFT_VERSION}_linux_amd64.tar.gz"
@@ -56,6 +81,7 @@ jobs:
           sudo chmod +x /usr/local/bin/syft
 
       - name: Install grype
+        if: env.SKIP_BUILD != 'true'
         run: |
           GRYPE_VERSION=0.110.0
           GRYPE_FILE="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
@@ -77,6 +103,7 @@ jobs:
           sudo chmod +x /usr/local/bin/grype
 
       - name: Install trivy
+        if: env.SKIP_BUILD != 'true'
         run: |
           TRIVY_VERSION=0.70.0
           TRIVY_FILE="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
@@ -87,6 +114,7 @@ jobs:
           sudo chmod +x /usr/local/bin/trivy
 
       - name: Install OPA
+        if: env.SKIP_BUILD != 'true'
         run: |
           OPA_VERSION=1.15.0
           sudo curl -sfL "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_amd64" \
@@ -95,6 +123,7 @@ jobs:
           sudo chmod +x /usr/local/bin/opa
 
       - name: Install dockle
+        if: env.SKIP_BUILD != 'true'
         run: |
           DOCKLE_VERSION=0.4.15
           DOCKLE_FILE="dockle_${DOCKLE_VERSION}_Linux-64bit.tar.gz"
@@ -105,13 +134,13 @@ jobs:
           sudo chmod +x /usr/local/bin/dockle
 
       - name: Install Alpine build tools
-        if: startsWith(matrix.image, 'alpine')
+        if: startsWith(matrix.image, 'alpine') && env.SKIP_BUILD != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends buildah fuse-overlayfs podman
 
       - name: Install apko + melange (Alpine only)
-        if: startsWith(matrix.image, 'alpine')
+        if: startsWith(matrix.image, 'alpine') && env.SKIP_BUILD != 'true'
         run: |
           APKO_VERSION=1.2.7
           APKO_FILE="apko_${APKO_VERSION}_linux_amd64.tar.gz"
@@ -132,12 +161,13 @@ jobs:
           sudo chmod +x /usr/local/bin/melange
 
       - name: Install Ubuntu build tools
-        if: startsWith(matrix.image, 'ubuntu')
+        if: startsWith(matrix.image, 'ubuntu') && env.SKIP_BUILD != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends debootstrap buildah fuse-overlayfs
 
       - name: Build image
+        if: env.SKIP_BUILD != 'true'
         run: |
           chmod +x scripts/build.sh builders/ubuntu.sh builders/alpine.sh
           echo "${{ secrets.MELANGE_SIGNING_KEY }}" > melange/xilasec@hardned-images.rsa
@@ -146,30 +176,35 @@ jobs:
           rm -f melange/xilasec@hardned-images.rsa
 
       - name: Generate SBOM
+        if: env.SKIP_BUILD != 'true'
         run: |
           chmod +x scripts/sbom.sh
           TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
           ./scripts/sbom.sh "$TAG" "dist/${{ matrix.image }}.tar"
 
       - name: Scan image
+        if: env.SKIP_BUILD != 'true'
         run: |
           chmod +x scripts/scan.sh
           TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
           ./scripts/scan.sh "$TAG" "dist/${{ matrix.image }}.tar"
 
       - name: Verify policy
+        if: env.SKIP_BUILD != 'true'
         run: |
           chmod +x scripts/verify.sh
           TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
           ./scripts/verify.sh "$TAG"
 
       - name: Compliance check
+        if: env.SKIP_BUILD != 'true'
         run: |
           chmod +x scripts/compliance.sh
           TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
           ./scripts/compliance.sh "$TAG"
 
       - name: Log in to GHCR
+        if: env.SKIP_BUILD != 'true'
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ghcr.io
@@ -177,6 +212,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push image
+        if: env.SKIP_BUILD != 'true'
         run: |
           if command -v fuse-overlayfs &>/dev/null && [ -c /dev/fuse ]; then
             BSTORE=(--storage-driver overlay --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs)
@@ -192,6 +228,7 @@ jobs:
           echo "IMAGE_DIGEST=$(cat /tmp/image-digest.txt)" >> "$GITHUB_ENV"
 
       - name: Sign and attest
+        if: env.SKIP_BUILD != 'true'
         run: |
           chmod +x scripts/sign.sh
           REPO="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}"
