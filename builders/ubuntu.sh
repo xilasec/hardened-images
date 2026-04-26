@@ -145,7 +145,7 @@ echo "[+] Building OCI image with buildah"
 
 # Pass storage driver as flags rather than writing /etc/containers/storage.conf,
 # which would conflict with any pre-existing storage DB.
-if command -v fuse-overlayfs &>/dev/null; then
+if command -v fuse-overlayfs &>/dev/null && [ -c /dev/fuse ]; then
   BSTORE=(--storage-driver overlay --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs)
 else
   BSTORE=(--storage-driver vfs)

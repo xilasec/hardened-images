@@ -31,7 +31,7 @@ case $IMAGE in
     ;;
 esac
 
-if command -v fuse-overlayfs &>/dev/null; then
+if command -v fuse-overlayfs &>/dev/null && [ -c /dev/fuse ]; then
   BSTORE=(--storage-driver overlay --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs)
 else
   BSTORE=(--storage-driver vfs)

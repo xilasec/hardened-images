@@ -8,7 +8,7 @@ IMAGE_NAME=$(echo "${IMAGE##*/}" | cut -d: -f1)
 DOCKER_TAR="dist/${IMAGE_NAME}-docker.tar"
 REPORT="compliance-${ARTIFACT}.json"
 
-if command -v fuse-overlayfs &>/dev/null; then
+if command -v fuse-overlayfs &>/dev/null && [ -c /dev/fuse ]; then
   BSTORE=(--storage-driver overlay --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs)
 else
   BSTORE=(--storage-driver vfs)

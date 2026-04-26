@@ -22,20 +22,20 @@ echo ""
 # of syft. Useful for catching things the SBOM might have missed and for
 # cross-checking grype results.
 echo "[+] Scanning with trivy (second opinion)"
-trivy image \
-  --input "$TAR" \
+trivy sbom \
   --severity HIGH,CRITICAL \
   --format table \
   --exit-code 0 \
-  --quiet
+  --quiet \
+  "$SBOM"
 
-trivy image \
-  --input "$TAR" \
+trivy sbom \
   --severity HIGH,CRITICAL \
   --format json \
   --output "$TRIVY_REPORT" \
   --exit-code 0 \
-  --quiet
+  --quiet \
+  "$SBOM"
 
 echo ""
 

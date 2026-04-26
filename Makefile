@@ -5,7 +5,7 @@ LATEST := ghcr.io/xilasec/$(BUILD):latest
 TAR    := dist/$(BUILD).tar
 
 # Pass storage driver as flags to avoid touching /etc/containers/storage.conf
-FUSE   := $(shell command -v fuse-overlayfs 2>/dev/null)
+FUSE   := $(shell command -v fuse-overlayfs 2>/dev/null && test -c /dev/fuse && echo yes)
 ifdef FUSE
   BSTORE := --storage-driver overlay --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs
 else

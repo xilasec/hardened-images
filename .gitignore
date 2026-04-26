@@ -28,5 +28,3 @@ coverage/
 .cache/
 
 melange/xilasec@hardned-images.rsa
-packages/*
-!packages/.gitkeep
