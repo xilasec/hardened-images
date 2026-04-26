@@ -1,0 +1,21 @@
+# Trivy ignore list for CVEs patched at build time via melange.
+#
+# When a melange pipeline applies a patch (uses: patch) the package version
+# string is unchanged, so trivy still matches it against upstream NVD and fires.
+# Entries here suppress those false positives explicitly and auditably.
+#
+# Format: one CVE / GHSA ID per line; inline comments are supported.
+# Reference: https://aquasecurity.github.io/trivy/latest/docs/configuration/filtering/#trivyignore
+#
+# Each entry MUST have a comment explaining:
+#   - which melange patch file applied the fix
+#   - when the entry was added so it can be reviewed / expired
+
+# busybox 1.37.0 - patch: melange/CVE-2024-58251.patch - added 2026-04-26
+CVE-2024-58251
+
+# busybox 1.37.0 - patch: melange/CVE-2025-46394.patch - added 2026-04-26
+CVE-2025-46394
+
+# busybox 1.37.0 - patch: melange/CVE-2025-60876.patch - added 2026-04-26
+CVE-2025-60876

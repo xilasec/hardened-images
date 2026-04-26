@@ -1,0 +1,38 @@
+# Grype ignore list for CVEs patched at build time via melange.
+#
+# When a melange pipeline applies a patch (uses: patch) the APK version string
+# stays the same (e.g. busybox 1.37.0), so grype still matches it against the
+# upstream advisory DB and fires. Entries here suppress those false positives
+# explicitly and auditably.
+#
+# Format reference: https://github.com/anchore/grype#specifying-matches-to-ignore
+#
+# Each entry MUST include:
+#   vulnerability: the CVE / GHSA ID
+#   package.name:  scope the ignore to a specific package (never wildcard)
+# And a comment block explaining:
+#   - which melange patch file applied the fix
+#   - when the entry was added so it can be reviewed / expired
+
+ignore:
+  # busybox 1.37.0 - CVE-2024-58251
+  # Patch: melange/CVE-2024-58251.patch applied in melange/busybox.yaml pipeline
+  # Added: 2026-04-26. Review when upgrading busybox past 1.37.0.
+  - vulnerability: CVE-2024-58251
+    package:
+      name: busybox
+
+  # busybox 1.37.0 - CVE-2025-46394
+  # Patch: melange/CVE-2025-46394.patch applied in melange/busybox.yaml pipeline
+  # Added: 2026-04-26. Review when upgrading busybox past 1.37.0.
+  - vulnerability: CVE-2025-46394
+    package:
+      name: busybox
+
+  # busybox 1.37.0 - CVE-2025-60876
+  # Patch: melange/CVE-2025-60876.patch applied in melange/busybox.yaml pipeline
+  # Added: 2026-04-26. Review when upgrading busybox past 1.37.0.
+  - vulnerability: CVE-2025-60876
+    package:
+      name: busybox
+
