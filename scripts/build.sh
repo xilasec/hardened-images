@@ -11,6 +11,8 @@ case $IMAGE in
     CONFIG="images/alpine/${IMAGE#alpine-}.yaml"
     OUT="dist/${IMAGE}.tar"
     TAG="ghcr.io/xilasec/${IMAGE}:${DATE}"
+    echo "[+] Building packages with melange"
+    ./builders/melange.sh
     echo "[+] Building $TAG"
     ./builders/alpine.sh "$CONFIG" "$OUT" "$TAG"
     ;;
@@ -29,5 +31,10 @@ case $IMAGE in
     ;;
 esac
 
-docker tag "$TAG" "ghcr.io/xilasec/${IMAGE}:latest"
+if command -v fuse-overlayfs &>/dev/null; then
+  BSTORE=(--storage-driver overlay --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs)
+else
+  BSTORE=(--storage-driver vfs)
+fi
+sudo buildah "${BSTORE[@]}" tag "$TAG" "ghcr.io/xilasec/${IMAGE}:latest"
 echo "[+] Built: $TAG"

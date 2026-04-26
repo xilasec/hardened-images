@@ -1,0 +1,44 @@
+package:
+  name: musl
+  version: 1.2.6
+  epoch: 0
+  description: Lightweight C standard library targeting correctness and safety
+  copyright:
+    - license: MIT
+  checks:
+    disabled:
+      - usrmerge
+
+environment:
+  contents:
+    keyring:
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
+    repositories:
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/main/
+    packages:
+      - alpine-baselayout-data
+      - busybox
+      - build-base
+      - linux-headers
+      - ca-certificates-bundle
+
+pipeline:
+  - uses: fetch
+    with:
+      uri: https://distfiles.alpinelinux.org/distfiles/v3.24/musl-${{package.version}}.tar.gz
+      expected-sha256: d585fd3b613c66151fc3249e8ed44f77020cb5e6c1e635a616d3f9f82460512a
+  - runs: |
+      ./configure \
+        --prefix=/usr \
+        --syslibdir=/lib \
+        --enable-optimize=speed
+      make -j"$(nproc)"
+      make DESTDIR="${{targets.destdir}}" install
+
+  - uses: strip
+
+# subpackages:
+#   - name: musl-dev
+#     description: musl libc headers and static library
+#     pipeline:
+#       - uses: split/dev

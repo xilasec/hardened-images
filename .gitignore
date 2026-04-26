@@ -5,6 +5,9 @@ Thumbs.db
 .env.local
 *.tar
 sbom-*.json
+scan-*.json
+trivy-*.json
+compliance-*.json
 *.grype.json
 dist/
 !pkg/.gitkeep
@@ -23,3 +26,7 @@ coverage/
 
 # Cache
 .cache/
+
+melange/xilasec@hardned-images.rsa
+packages/*
+!packages/.gitkeep

@@ -76,6 +76,16 @@ jobs:
           sudo tar -C /usr/local/bin -xzf "${GRYPE_FILE}" grype
           sudo chmod +x /usr/local/bin/grype
 
+      - name: Install trivy
+        run: |
+          TRIVY_VERSION=0.70.0
+          TRIVY_FILE="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          TRIVY_BASE_URL="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/"
+          curl -sfL "${TRIVY_BASE_URL}${TRIVY_FILE}" -o "${TRIVY_FILE}"
+          echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9 ${TRIVY_FILE}" | sha256sum -c
+          sudo tar -C /usr/local/bin -xzf "${TRIVY_FILE}" trivy
+          sudo chmod +x /usr/local/bin/trivy
+
       - name: Install OPA
         run: |
           OPA_VERSION=1.15.0
@@ -94,7 +104,7 @@ jobs:
           sudo tar -C /usr/local/bin -xzf "${DOCKLE_FILE}" dockle
           sudo chmod +x /usr/local/bin/dockle
 
-      - name: Install apko (Alpine only)
+      - name: Install apko + melange (Alpine only)
         if: startsWith(matrix.image, 'alpine')
         run: |
           APKO_VERSION=1.2.7
@@ -105,6 +115,24 @@ jobs:
           sudo tar -C . -xzf "${APKO_FILE}" apko_${APKO_VERSION}_linux_amd64/apko
           sudo cp apko_${APKO_VERSION}_linux_amd64/apko /usr/local/bin/apko
           sudo chmod +x /usr/local/bin/apko
+
+          MELANGE_VERSION=0.50.3
+          MELANGE_FILE="melange_${MELANGE_VERSION}_linux_amd64.tar.gz"
+          curl -sfL "https://github.com/chainguard-dev/melange/releases/download/v${MELANGE_VERSION}/${MELANGE_FILE}" \
+            -o "${MELANGE_FILE}"
+          echo "aa64af564fd8fc50ed251d83c2b00ee5a9d9c159cb5f722c0af975b337bf0a85 ${MELANGE_FILE}" | sha256sum -c
+          sudo tar -C . -xzf "${MELANGE_FILE}" melange_${MELANGE_VERSION}_linux_amd64/melange
+          sudo cp melange_${MELANGE_VERSION}_linux_amd64/melange /usr/local/bin/melange
+          sudo chmod +x /usr/local/bin/melange
+
+      - name: Build custom packages with melange (Alpine only)
+        if: startsWith(matrix.image, 'alpine')
+        run: |
+          echo "${{ secrets.MELANGE_SIGNING_KEY }}" > /tmp/melange.rsa
+          chmod 600 /tmp/melange.rsa
+          chmod +x builders/melange.sh
+          MELANGE_SIGNING_KEY=/tmp/melange.rsa ./builders/melange.sh x86_64
+          rm -f /tmp/melange.rsa
 
       - name: Install Ubuntu build tools
         if: startsWith(matrix.image, 'ubuntu')
@@ -127,7 +155,7 @@ jobs:
         run: |
           chmod +x scripts/scan.sh
           TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
-          ./scripts/scan.sh "$TAG"
+          ./scripts/scan.sh "$TAG" "dist/${{ matrix.image }}.tar"
 
       - name: Verify policy
         run: |
@@ -150,14 +178,23 @@ jobs:
 
       - name: Push image
         run: |
+          if command -v fuse-overlayfs &>/dev/null; then
+            BSTORE=(--storage-driver overlay --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs)
+          else
+            BSTORE=(--storage-driver vfs)
+          fi
           TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
-          docker push "$TAG"
-          docker push "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:latest"
+          LATEST="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:latest"
+          sudo buildah "${BSTORE[@]}" push --authfile "$HOME/.docker/config.json" --format oci \
+            --digestfile /tmp/image-digest.txt "$TAG" "docker://$TAG"
+          sudo buildah "${BSTORE[@]}" push --authfile "$HOME/.docker/config.json" --format oci \
+            "$LATEST" "docker://$LATEST"
+          echo "IMAGE_DIGEST=$(cat /tmp/image-digest.txt)" >> "$GITHUB_ENV"
 
       - name: Sign and attest
         run: |
           chmod +x scripts/sign.sh
-          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
-          ./scripts/sign.sh "$TAG"
+          REPO="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}"
+          ./scripts/sign.sh "${REPO}@${IMAGE_DIGEST}"
         env:
           COSIGN_EXPERIMENTAL: "1"

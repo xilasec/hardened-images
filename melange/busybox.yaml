@@ -1,0 +1,60 @@
+package:
+  name: busybox
+  version: 1.37.0
+  epoch: 0
+  description: Size-optimized toolbox of UNIX utilities
+  copyright:
+    - license: GPL-2.0-only
+  checks:
+    disabled:
+      - usrmerge
+
+environment:
+  contents:
+    keyring:
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
+    repositories:
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/main/
+    packages:
+      - alpine-baselayout-data
+      - busybox
+      - build-base
+      - linux-headers
+      - ca-certificates-bundle
+      - ncurses-dev
+      - perl
+
+pipeline:
+  - uses: fetch
+    with:
+      uri: https://distfiles.alpinelinux.org/distfiles/v3.24/busybox-${{package.version}}.tar.bz2
+      expected-sha256: 3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4
+  - uses: patch
+    with:
+      patches: ./CVE-2024-58251.patch ./CVE-2025-46394.patch ./CVE-2025-60876.patch
+  - runs: |
+      rm -rf .config/
+      make distclean
+      make defconfig
+      sed -i \
+        -e 's/CONFIG_TC=y/CONFIG_TC=n/' \
+        -e 's/CONFIG_FEATURE_TC_INGRESS=y/CONFIG_FEATURE_TC_INGRESS=n/' \
+        -e 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' \
+        -e 's/CONFIG_FEATURE_SUID=y/CONFIG_FEATURE_SUID=n/' \
+        -e 's/CONFIG_FEATURE_SUID_CONFIG=y/CONFIG_FEATURE_SUID_CONFIG=n/' \
+        -e 's/CONFIG_INETD=y/CONFIG_INETD=n/' \
+        -e 's/CONFIG_HTTPD=y/CONFIG_HTTPD=n/' \
+        -e 's/CONFIG_FTPD=y/CONFIG_FTPD=n/' \
+        -e 's/CONFIG_TELNETD=y/CONFIG_TELNETD=n/' \
+        -e 's/CONFIG_TCPSVD=y/CONFIG_TCPSVD=n/' \
+        -e 's/CONFIG_UDPSVD=y/CONFIG_UDPSVD=n/' \
+        -e 's/CONFIG_LOGIN=y/CONFIG_LOGIN=n/' \
+        -e 's/CONFIG_SU=y/CONFIG_SU=n/' \
+        .config
+      export CFLAGS="-Os -fstack-protector-all -D_FORTIFY_SOURCE=2"
+      export LDFLAGS="-static -Wl,-z,relro -Wl,-z,now"
+      make -j"$(nproc)"
+  - runs: |
+      make CONFIG_PREFIX="${{targets.destdir}}" install
+
+  - uses: strip
