@@ -125,15 +125,6 @@ jobs:
           sudo cp melange_${MELANGE_VERSION}_linux_amd64/melange /usr/local/bin/melange
           sudo chmod +x /usr/local/bin/melange
 
-      - name: Build custom packages with melange (Alpine only)
-        if: startsWith(matrix.image, 'alpine')
-        run: |
-          echo "${{ secrets.MELANGE_SIGNING_KEY }}" > /tmp/melange.rsa
-          chmod 600 /tmp/melange.rsa
-          chmod +x builders/melange.sh
-          MELANGE_SIGNING_KEY=/tmp/melange.rsa ./builders/melange.sh x86_64
-          rm -f /tmp/melange.rsa
-
       - name: Install Ubuntu build tools
         if: startsWith(matrix.image, 'ubuntu')
         run: |
@@ -143,7 +134,10 @@ jobs:
       - name: Build image
         run: |
           chmod +x scripts/build.sh builders/ubuntu.sh builders/alpine.sh
+          echo "${{ secrets.MELANGE_SIGNING_KEY }}" > melange/xilasec@hardned-images.rsa
+          chmod 600 melange/xilasec@hardned-images.rsa
           ./scripts/build.sh "${{ matrix.image }}" "${{ env.DATE }}"
+          rm -f melange/xilasec@hardned-images.rsa
 
       - name: Generate SBOM
         run: |
