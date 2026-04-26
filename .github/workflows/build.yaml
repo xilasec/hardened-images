@@ -104,6 +104,12 @@ jobs:
           sudo tar -C /usr/local/bin -xzf "${DOCKLE_FILE}" dockle
           sudo chmod +x /usr/local/bin/dockle
 
+      - name: Install Alpine build tools
+        if: startsWith(matrix.image, 'alpine')
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends buildah fuse-overlayfs podman
+
       - name: Install apko + melange (Alpine only)
         if: startsWith(matrix.image, 'alpine')
         run: |
