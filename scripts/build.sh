@@ -31,10 +31,11 @@ case $IMAGE in
     ;;
 esac
 
-# if command -v fuse-overlayfs &>/dev/null && [ -c /dev/fuse ]; then
-#   BSTORE=(--storage-driver overlay --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs)
-# else
-#   BSTORE=(--storage-driver vfs)
-# fi
-# sudo buildah "${BSTORE[@]}" tag "$TAG" "ghcr.io/xilasec/${IMAGE}:latest"
-# echo "[+] Built: $TAG"
+if command -v fuse-overlayfs &>/dev/null && [ -c /dev/fuse ]; then
+  BSTORE=(--storage-driver overlay --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs)
+else
+  BSTORE=(--storage-driver vfs)
+fi
+echo "[+] Saving OCI archive"
+sudo buildah "${BSTORE[@]}" push "$TAG" "oci-archive:$OUT"
+echo "[+] Done: $TAG"
