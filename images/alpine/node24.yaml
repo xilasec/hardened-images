@@ -1,0 +1,40 @@
+# Hardened Node.js 24 (LTS) base image on Alpine (musl), built reproducibly with apko.
+#
+# Alpine v3.23 ships the Node 24 LTS line: `nodejs` (24.x) lives in the `main`
+# repository and `npm` in `community`. Both are pulled, signature-verified and
+# installed straight from Alpine's signed package index by apko - no third-party
+# repositories and no build-from-source needed for the runtime itself.
+#
+# node lands at /usr/bin/node, matching the path in the Ubuntu node24 image.
+contents:
+  keyring:
+    - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
+    - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-4a6a0840.rsa.pub
+    - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-5261cecb.rsa.pub
+  repositories:
+    - https://dl-cdn.alpinelinux.org/alpine/v3.23/main/
+    - https://dl-cdn.alpinelinux.org/alpine/v3.23/community/
+  packages:
+    - alpine-baselayout
+    - ca-certificates-bundle
+    - nodejs   # 24.x in Alpine v3.23 main
+    - npm      # Alpine v3.23 community
+
+accounts:
+  run-as: 1000
+  users:
+    - username: appuser
+      uid: 1000
+  groups:
+    - groupname: appuser
+      gid: 1000
+
+entrypoint:
+  command: /usr/bin/node
+
+# Both arches resolve nodejs/npm from Alpine's index. The builder selects one
+# at build time via apko --arch (host arch by default, ARCH=arm64 to override),
+# so a single arch is built natively without emulation.
+archs:
+  - x86_64
+  - aarch64

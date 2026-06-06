@@ -2,6 +2,18 @@ name: Build Hardened Images
 
 on:
   workflow_dispatch:
+    inputs:
+      images:
+        description: "Which images to build"
+        type: choice
+        default: all
+        options:
+          - all
+          - node24
+          - alpine-node24
+          - ubuntu-node24
+          - alpine-balanced
+          - ubuntu-noble
   # Enable this when we have a good base
   # schedule:
     # - cron: "0 3 * * *"
@@ -12,12 +24,37 @@ permissions:
   id-token: write
 
 jobs:
+  # Translate the `images` dispatch input into the build matrix. Defaults to
+  # `all` (also used by the scheduled trigger, where inputs are empty).
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - id: select
+        env:
+          IMAGES: ${{ inputs.images }}
+        run: |
+          case "${IMAGES:-all}" in
+            all)    M='["alpine-balanced","ubuntu-noble","alpine-node24","ubuntu-node24"]' ;;
+            node24) M='["alpine-node24","ubuntu-node24"]' ;;
+            alpine-balanced|ubuntu-noble|alpine-node24|ubuntu-node24) M="[\"${IMAGES}\"]" ;;
+            *) echo "Unknown images selection: ${IMAGES}"; exit 1 ;;
+          esac
+          echo "Building: $M"
+          echo "matrix=$M" >> "$GITHUB_OUTPUT"
+
   build:
-    runs-on: ubuntu-slim
+    needs: setup
+    # ubuntu-latest (currently Ubuntu 24.04 "noble") is the reference build
+    # environment. Building, scanning and smoke-testing here means CI matches
+    # what contributors get locally on a noble box, and the debootstrap target
+    # (noble) lines up with the host distro.
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        image: [alpine-balanced, ubuntu-noble]
+        image: ${{ fromJSON(needs.setup.outputs.matrix) }}
 
     steps:
       - name: Checkout
@@ -166,7 +203,7 @@ jobs:
         if: startsWith(matrix.image, 'ubuntu') && env.SKIP_BUILD != 'true'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends debootstrap buildah fuse-overlayfs
+          sudo apt-get install -y --no-install-recommends debootstrap buildah fuse-overlayfs xz-utils
 
       - name: Build image
         if: env.SKIP_BUILD != 'true'
@@ -205,6 +242,16 @@ jobs:
           TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
           ./scripts/compliance.sh "$TAG"
 
+      # Functional gate before publishing: load the image into Docker (the
+      # runtime on this runner) and assert the Node 24 runtime actually works
+      # and runs as a non-root user. Runs only for the node24 variants.
+      - name: Smoke test
+        if: contains(matrix.image, 'node24') && env.SKIP_BUILD != 'true'
+        run: |
+          chmod +x scripts/smoke.sh
+          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
+          ./scripts/smoke.sh "dist/${{ matrix.image }}.tar" "$TAG" v24
+
       - name: Log in to GHCR
         if: env.SKIP_BUILD != 'true'
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
@@ -223,6 +270,12 @@ jobs:
           fi
           TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
           LATEST="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:latest"
+          # Import the built docker-archive into buildah storage and tag both
+          # date + latest. Both build paths emit a docker-archive and neither
+          # leaves the image in buildah storage (apko never does; ubuntu.sh only
+          # writes the tar), so this import is what makes the push work at all.
+          IMG_ID=$(sudo buildah "${BSTORE[@]}" pull "docker-archive:dist/${{ matrix.image }}.tar" | tail -n1)
+          sudo buildah "${BSTORE[@]}" tag "$IMG_ID" "$TAG" "$LATEST"
           sudo buildah "${BSTORE[@]}" push --authfile "$HOME/.docker/config.json" --format oci \
             --digestfile /tmp/image-digest.txt "$TAG" "docker://$TAG"
           sudo buildah "${BSTORE[@]}" push --authfile "$HOME/.docker/config.json" --format oci \

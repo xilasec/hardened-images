@@ -4,10 +4,13 @@ set -euo pipefail
 IMAGE=$1
 TAR=$2
 
+# Reports live next to the build output (override with OUTDIR).
+OUTDIR=${OUTDIR:-dist}
+mkdir -p "$OUTDIR"
 ARTIFACT=$(echo "${IMAGE##*/}" | tr ':' '-')
-SBOM="sbom-${ARTIFACT}.json"
-SCAN_REPORT="scan-${ARTIFACT}.json"
-TRIVY_REPORT="trivy-${ARTIFACT}.json"
+SBOM="${OUTDIR}/sbom-${ARTIFACT}.json"
+SCAN_REPORT="${OUTDIR}/scan-${ARTIFACT}.json"
+TRIVY_REPORT="${OUTDIR}/trivy-${ARTIFACT}.json"
 
 # Reads the SBOM so it uses the same artifact inventory as the rest of the
 # pipeline. Ubuntu OVAL / Alpine secdb are aware of backported patch versions,

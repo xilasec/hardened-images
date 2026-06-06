@@ -6,24 +6,52 @@ TAG=$3
 
 OUT=$2
 
-ROOTFS=./tmp/
+# debootstrap scratch rootfs. Override with WORKDIR to put it on a writable
+# native filesystem - debootstrap needs a real writable fs and won't work on a
+# read-only host mount (e.g. a Lima virtiofs mount); keeping it off virtiofs/9p
+# is also much faster.
+ROOTFS="${WORKDIR:-./tmp}"
 
 echo "[+] Parsing config"
-ARCH=$(yq '.arch' $CONFIG)
 VERSION=$(yq '.version' $CONFIG)
-MIRROR=$(yq '.mirror' $CONFIG)
 ENTRYPOINT_UID=$(yq -r '.entrypoint.uid' $CONFIG)
 ENTRYPOINT=$(yq -r '.entrypoint.command' $CONFIG)
-LOCAL_PKGS=$(PWD=$PWD yq '.arch as $a | .local-packages | map(strenv(PWD) + "/pkg/" + . + "_" + $a + ".deb") | .[]' $CONFIG)
 
-echo "[+] Running debootstrap (reproducible) $VERSION $ROOTFS $MIRROR ${LOCAL_PKGS}"
+# Target architecture: the ARCH env var overrides, otherwise the host arch.
+# This lets one config build natively on amd64 (CI / x86 hosts) and arm64
+# (e.g. Apple Silicon) with no per-arch config files and no emulation.
+HOST_ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
+case "${ARCH:-$HOST_ARCH}" in
+  amd64|x86_64)  ARCH=amd64 ;;
+  arm64|aarch64) ARCH=arm64 ;;
+  *) echo "[-] Unsupported architecture: ${ARCH:-$HOST_ARCH}"; exit 1 ;;
+esac
+
+# Refuse to build an arch the config doesn't declare (`arch:` may be a scalar
+# like `amd64` or a list like `[amd64, arm64]`).
+SUPPORTED=$(yq e '[.arch] | flatten | .[]' "$CONFIG")
+if ! printf '%s\n' $SUPPORTED | grep -qx "$ARCH"; then
+  echo "[-] $CONFIG does not support arch '$ARCH' (declares: $(echo $SUPPORTED | tr '\n' ' '))"
+  exit 1
+fi
+
+# Ubuntu serves amd64/i386 from archive+security.ubuntu.com and every other
+# port (arm64, ...) from ports.ubuntu.com - pick the right mirrors per arch.
+case "$ARCH" in
+  amd64) APT_BASE="http://archive.ubuntu.com/ubuntu";      APT_SEC="http://security.ubuntu.com/ubuntu" ;;
+  *)     APT_BASE="http://ports.ubuntu.com/ubuntu-ports";  APT_SEC="http://ports.ubuntu.com/ubuntu-ports" ;;
+esac
+
+LOCAL_PKGS=$(ARCH=$ARCH PWD=$PWD yq '.local-packages | map(strenv(PWD) + "/pkg/" + . + "_" + strenv(ARCH) + ".deb") | .[]' $CONFIG)
+
+echo "[+] Running debootstrap (reproducible) $ARCH $VERSION $ROOTFS $APT_BASE ${LOCAL_PKGS}"
 sudo debootstrap \
   --variant=minbase \
   --arch="$ARCH" \
   --exclude=e2fsprogs,sensible-utils,sysvinit-utils \
   "$VERSION" \
   "$ROOTFS" \
-  "$MIRROR"
+  "$APT_BASE"
 
 
 echo "[+] Injecting and installing local packages"
@@ -39,9 +67,9 @@ fi
 
 echo "[+] Configuring apt sources"
 sudo tee "$ROOTFS/etc/apt/sources.list" > /dev/null <<EOF
-deb http://archive.ubuntu.com/ubuntu ${VERSION} main restricted universe multiverse
-deb https://security.ubuntu.com/ubuntu ${VERSION}-security main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu ${VERSION}-updates main restricted universe multiverse
+deb ${APT_BASE} ${VERSION} main restricted universe multiverse
+deb ${APT_SEC} ${VERSION}-security main restricted universe multiverse
+deb ${APT_BASE} ${VERSION}-updates main restricted universe multiverse
 EOF
 
 # Prevent docs, locales, and recommends from ever being written to disk.
@@ -73,6 +101,34 @@ sudo chroot "$ROOTFS" apt-get autoremove --purge -y
 sudo chroot "$ROOTFS" apt-get clean
 sudo rm -rf "$ROOTFS/var/lib/apt/lists/"*
 sudo rm -rf "$ROOTFS/var/cache/apt/"*
+
+echo "[+] Fetching upstream tarballs (pinned by sha256)"
+# Optional `.tarballs` section: fetch an upstream binary tarball, verify it
+# against a pinned sha256, and extract it into the rootfs. This keeps software
+# that the distro doesn't package (e.g. Node.js 24) reproducible and auditable
+# without adding third-party apt repositories.
+num_tarballs=$(yq e '.tarballs | length' "$CONFIG" 2>/dev/null || echo 0)
+[ "$num_tarballs" = "null" ] && num_tarballs=0
+for ((t=0; t<num_tarballs; t++)); do
+  # url/sha256 may be a scalar (single arch) or a per-arch map keyed by
+  # amd64/arm64 - `.url.${ARCH} // .url` resolves both forms.
+  url=$(yq e ".tarballs[$t].url.${ARCH} // .tarballs[$t].url" "$CONFIG")
+  sha=$(yq e ".tarballs[$t].sha256.${ARCH} // .tarballs[$t].sha256" "$CONFIG")
+  strip=$(yq e ".tarballs[$t].strip-components // 0" "$CONFIG")
+  dest=$(yq e ".tarballs[$t].dest // \"/\"" "$CONFIG")
+  if [ -z "$url" ] || [ "$url" = "null" ]; then
+    echo "[-] tarballs[$t] has no url for arch '$ARCH'"; exit 1
+  fi
+  tmpf=$(mktemp)
+  echo "  -> Downloading $url"
+  curl -sfL "$url" -o "$tmpf"
+  echo "  -> Verifying sha256 $sha"
+  echo "${sha}  ${tmpf}" | sha256sum -c -
+  echo "  -> Extracting into ${dest} (strip-components=${strip})"
+  sudo mkdir -p "${ROOTFS%/}${dest}"
+  sudo tar -C "${ROOTFS%/}${dest}" --strip-components="${strip}" -xf "$tmpf"
+  rm -f "$tmpf"
+done
 
 echo "[+] Creating users"
 num_users=$(yq e '.accounts.users | length' $CONFIG)
@@ -137,8 +193,13 @@ sudo find "$ROOTFS/usr/lib" -name "*.a" -delete 2>/dev/null || true
 # raw upstream version (e.g. "openssl 3.0.13"), overriding the dpkg cataloger result
 # that carries the Ubuntu epoch/backport suffix. Without that suffix grype falls back
 # to upstream NVD data and flags already-patched CVEs as unresolved.
+#
+# `node` is the exception: it comes from a pinned upstream tarball, not dpkg, so
+# there is no dpkg version to preserve. We deliberately leave it unstripped so
+# syft's binary cataloger can fingerprint the Node runtime version and grype can
+# scan it for CVEs - stripping it would hide the runtime from the SBOM.
 sudo find "$ROOTFS/bin" "$ROOTFS/sbin" "$ROOTFS/usr/bin" "$ROOTFS/usr/sbin" \
-  -maxdepth 1 -type f \
+  -maxdepth 1 -type f ! -name node \
   -exec strip --strip-unneeded {} + 2>/dev/null || true
 
 echo "[+] Clearing device nodes from rootfs"
@@ -175,6 +236,16 @@ sudo buildah "${BSTORE[@]}" config \
 
 sudo buildah "${BSTORE[@]}" commit --format oci "$container" "$TAG"
 
-echo "[+] Saving OCI archive"
-sudo buildah "${BSTORE[@]}" push "$TAG" "oci-archive:$OUT"
+# Save as a docker-archive so the build output is a single, docker-loadable tar
+# - the same format apko emits - so one set of tooling (docker load / syft /
+# dockle / buildah pull docker-archive) works for both build paths. The image
+# pushed to the registry is still OCI (see the push step); this only affects the
+# local archive.
+#
+# Remove any previous archive first: the docker-archive transport appends to an
+# existing file rather than overwriting it ("doesn't support modifying existing
+# images"), which breaks repeated local builds.
+echo "[+] Saving docker-archive"
+sudo rm -f "$OUT"
+sudo buildah "${BSTORE[@]}" push "$TAG" "docker-archive:$OUT:$TAG"
 echo "[+] Done: $TAG"

@@ -3,9 +3,10 @@ set -euo pipefail
 
 IMAGE=$1
 
+OUTDIR=${OUTDIR:-dist}
 ARTIFACT=$(echo "${IMAGE##*/}" | tr ':' '-')
-SCAN_REPORT="scan-${ARTIFACT}.json"
-TRIVY_REPORT="trivy-${ARTIFACT}.json"
+SCAN_REPORT="${OUTDIR}/scan-${ARTIFACT}.json"
+TRIVY_REPORT="${OUTDIR}/trivy-${ARTIFACT}.json"
 
 echo "[+] Running policy checks against $SCAN_REPORT"
 
