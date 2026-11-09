@@ -1,292 +1,176 @@
 name: Build Hardened Images
 
+# Every image is built for every flavor (musl = Alpine, glibc = Wolfi) and
+# every arch, on native runners, from its committed lockfile:
+#
+#   plan     parity check + matrix (scripts/matrix.sh), stale-package check
+#   image    build -> reproducibility -> SBOM -> grype+trivy -> policy ->
+#            dockle -> functional test; uploads digest/SBOM/reports only if
+#            every gate passed
+#   publish  (main only) apko publish from the same lock, assert pushed ==
+#            tested digests, cosign sign + SBOM/VEX attestations, SLSA
+#            provenance, then move the <flavor> tag
+#
+# Publishing is a no-op when the registry already serves the tested digests,
+# so re-running this workflow is safe. Images change when locks change; locks
+# are refreshed by update-locks.yaml.
+
 on:
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
-      images:
-        description: "Which images to build"
-        type: choice
+      image:
+        description: "Image to build (directory under images/), or all"
+        type: string
         default: all
-        options:
-          - all
-          - node24
-          - alpine-node24
-          - ubuntu-node24
-          - alpine-balanced
-          - ubuntu-noble
-  # Enable this when we have a good base
-  # schedule:
-    # - cron: "0 3 * * *"
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Translate the `images` dispatch input into the build matrix. Defaults to
-  # `all` (also used by the scheduled trigger, where inputs are empty).
-  setup:
-    runs-on: ubuntu-latest
+  plan:
+    runs-on: ubuntu-24.04
     outputs:
-      matrix: ${{ steps.select.outputs.matrix }}
+      build: ${{ steps.matrix.outputs.build }}
+      publish: ${{ steps.matrix.outputs.publish }}
     steps:
-      - id: select
-        env:
-          IMAGES: ${{ inputs.images }}
-        run: |
-          case "${IMAGES:-all}" in
-            all)    M='["alpine-balanced","ubuntu-noble","alpine-node24","ubuntu-node24"]' ;;
-            node24) M='["alpine-node24","ubuntu-node24"]' ;;
-            alpine-balanced|ubuntu-noble|alpine-node24|ubuntu-node24) M="[\"${IMAGES}\"]" ;;
-            *) echo "Unknown images selection: ${IMAGES}"; exit 1 ;;
-          esac
-          echo "Building: $M"
-          echo "matrix=$M" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-  build:
-    needs: setup
-    # ubuntu-latest (currently Ubuntu 24.04 "noble") is the reference build
-    # environment. Building, scanning and smoke-testing here means CI matches
-    # what contributors get locally on a noble box, and the debootstrap target
-    # (noble) lines up with the host distro.
-    runs-on: ubuntu-latest
+      - name: Flavor parity + matrix
+        id: matrix
+        env:
+          IMAGE: ${{ inputs.image || 'all' }}
+        run: |
+          M=$(scripts/matrix.sh "$IMAGE")
+          echo "$M" | jq .
+          echo "build=$(jq -c .build <<<"$M")" >> "$GITHUB_OUTPUT"
+          echo "publish=$(jq -c .publish <<<"$M")" >> "$GITHUB_OUTPUT"
+
+      - name: Committed melange packages match their recipes
+        run: |
+          for f in musl glibc; do for a in x86_64 aarch64; do
+            scripts/packages.sh "$f" "$a" --check
+          done; done
+
+      - name: Install opa
+        run: scripts/install-tools.sh opa
+
+      - name: Policy unit tests
+        run: opa test policies -v
+
+  image:
+    needs: plan
+    name: ${{ matrix.image }} ${{ matrix.flavor }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        image: ${{ fromJSON(needs.setup.outputs.matrix) }}
-
+        include: ${{ fromJSON(needs.plan.outputs.build) }}
+    env:
+      IMAGE: ${{ matrix.image }}
+      FLAVOR: ${{ matrix.flavor }}
+      ARCH: ${{ matrix.arch }}
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set build date
-        run: echo "DATE=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
+      - name: Install tools
+        run: scripts/install-tools.sh apko syft grype trivy opa dockle
 
-      - name: Check if already published
-        run: |
-          OWNER="${{ github.repository_owner }}"
-          IMAGE="${{ matrix.image }}"
-          TAG="${{ env.DATE }}"
-          GHCR_TOKEN=$(curl -sf \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://ghcr.io/token?scope=repository:${OWNER}/${IMAGE}:pull&service=ghcr.io" \
-            | jq -r '.token // empty' || true)
-          if [ -z "$GHCR_TOKEN" ]; then
-            echo "Could not get GHCR token (first publish?), proceeding with build"
-            exit 0
-          fi
-          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer ${GHCR_TOKEN}" \
-            -H "Accept: application/vnd.oci.image.manifest.v1+json" \
-            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-            "https://ghcr.io/v2/${OWNER}/${IMAGE}/manifests/${TAG}" || echo "0")
-          if [ "$STATUS" = "200" ]; then
-            echo "Image ${IMAGE}:${TAG} already published, skipping build"
-            echo "SKIP_BUILD=true" >> "$GITHUB_ENV"
-          else
-            echo "Image ${IMAGE}:${TAG} not found (status ${STATUS}), proceeding with build"
-          fi
+      - name: Build
+        run: scripts/build.sh "$IMAGE" "$FLAVOR" "$ARCH"
 
-      - name: Install cosign
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          COSIGN_VERSION=3.0.5
-          sudo curl -sfL "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64" \
-            -o /usr/local/bin/cosign
-          echo "db15cc99e6e4837daabab023742aaddc3841ce57f193d11b7c3e06c8003642b2 /usr/local/bin/cosign" | sha256sum -c
-          sudo chmod +x /usr/local/bin/cosign
+      - name: Reproducibility
+        run: scripts/repro.sh "$IMAGE" "$FLAVOR" "$ARCH"
 
-      - name: Install syft
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          SYFT_VERSION=1.42.3
-          SYFT_FILE="syft_${SYFT_VERSION}_linux_amd64.tar.gz"
-          SYFT_BASE_URL="https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/"
-          curl -sfL "${SYFT_BASE_URL}${SYFT_FILE}" -o "${SYFT_FILE}"
-          echo "0d6be741479eddd2c8644a288990c04f3df0d609bbc1599a005532a9dff63509 ${SYFT_FILE}" | sha256sum -c
-          curl -sfL "${SYFT_BASE_URL}syft_${SYFT_VERSION}_checksums.txt.pem" -o checksums.txt.pem
-          echo "497aaaaec5b69edcb6dc426f97d7c8c5c28d8508bb550c917a084d8182d3af86 checksums.txt.pem" | sha256sum -c
-          curl -sfL "${SYFT_BASE_URL}syft_${SYFT_VERSION}_checksums.txt.sig" -o checksums.txt.sig
-          echo "349538abda800891805ed16de07d2cb98a0c04d8493b69893f7b224f45e5b423 checksums.txt.sig" | sha256sum -c
-          curl -sfL "${SYFT_BASE_URL}syft_${SYFT_VERSION}_checksums.txt" -o checksums.txt
-          echo "3c4a66ddb6e0689fac2be19247064f6053e2a2746035dfbcef8609baa9088f92 checksums.txt" | sha256sum -c
-          cosign verify-blob ./checksums.txt \
-            --certificate ./checksums.txt.pem \
-            --signature ./checksums.txt.sig \
-            --certificate-identity-regexp 'https://github\.com/anchore/syft/\.github/workflows/.+' \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
-          sudo tar -C /usr/local/bin -xzf "${SYFT_FILE}" syft
-          sudo chmod +x /usr/local/bin/syft
+      - name: SBOM
+        run: scripts/sbom.sh "$IMAGE" "$FLAVOR" "$ARCH"
 
-      - name: Install grype
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          GRYPE_VERSION=0.110.0
-          GRYPE_FILE="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
-          GRYPE_BASE_URL="https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/"
-          curl -sfL "${GRYPE_BASE_URL}${GRYPE_FILE}" -o "${GRYPE_FILE}"
-          echo "aaa98d27d2d7efd9317c6a1ad6d9b15f3e65bab320e7d03bde41e251387bb71c ${GRYPE_FILE}" | sha256sum -c
-          curl -sfL "${GRYPE_BASE_URL}grype_${GRYPE_VERSION}_checksums.txt.pem" -o checksums2.txt.pem
-          echo "953adf75e6a84ee1fa9c0062e50d3436400798bfc73963316ba9add27d97b5be checksums2.txt.pem" | sha256sum -c
-          curl -sfL "${GRYPE_BASE_URL}grype_${GRYPE_VERSION}_checksums.txt.sig" -o checksums2.txt.sig
-          echo "550f13a16ce278e464409f087ded03f80aeca8a3550212d763b43a2b0a0dfeb7 checksums2.txt.sig" | sha256sum -c
-          curl -sfL "${GRYPE_BASE_URL}grype_${GRYPE_VERSION}_checksums.txt" -o checksums2.txt
-          echo "210952ee17cafaf0636fea83e7049fe8c4f8503f4d7375ddd98b9defaf86ed34 checksums2.txt" | sha256sum -c
-          cosign verify-blob ./checksums2.txt \
-            --certificate ./checksums2.txt.pem \
-            --signature ./checksums2.txt.sig \
-            --certificate-identity-regexp 'https://github\.com/anchore/grype/\.github/workflows/.+' \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
-          sudo tar -C /usr/local/bin -xzf "${GRYPE_FILE}" grype
-          sudo chmod +x /usr/local/bin/grype
+      - name: Scan (grype + trivy)
+        run: scripts/scan.sh "$IMAGE" "$FLAVOR" "$ARCH"
 
-      - name: Install trivy
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          TRIVY_VERSION=0.70.0
-          TRIVY_FILE="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
-          TRIVY_BASE_URL="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/"
-          curl -sfL "${TRIVY_BASE_URL}${TRIVY_FILE}" -o "${TRIVY_FILE}"
-          echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9 ${TRIVY_FILE}" | sha256sum -c
-          sudo tar -C /usr/local/bin -xzf "${TRIVY_FILE}" trivy
-          sudo chmod +x /usr/local/bin/trivy
+      - name: Policy gate
+        run: scripts/verify.sh "$IMAGE" "$FLAVOR" "$ARCH"
 
-      - name: Install OPA
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          OPA_VERSION=1.15.0
-          sudo curl -sfL "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_amd64" \
-            -o /usr/local/bin/opa
-          echo "3a39bdd94d89652ad611258d15958902dc3e753ef17a8dfd11105a599a5aff1e /usr/local/bin/opa" | sha256sum -c
-          sudo chmod +x /usr/local/bin/opa
+      - name: CIS compliance (dockle)
+        run: scripts/compliance.sh "$IMAGE" "$FLAVOR" "$ARCH"
 
-      - name: Install dockle
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          DOCKLE_VERSION=0.4.15
-          DOCKLE_FILE="dockle_${DOCKLE_VERSION}_Linux-64bit.tar.gz"
-          curl -sfL "https://github.com/goodwithtech/dockle/releases/download/v${DOCKLE_VERSION}/${DOCKLE_FILE}" \
-            -o "${DOCKLE_FILE}"
-          echo "8bfc9183d1d3d67800edb45bea4bb63ddf1d28bec5f89944075a07007d79caad ${DOCKLE_FILE}" | sha256sum -c
-          sudo tar -C /usr/local/bin -xzf "${DOCKLE_FILE}" dockle
-          sudo chmod +x /usr/local/bin/dockle
+      - name: Functional test
+        run: scripts/test.sh "$IMAGE" "$FLAVOR" "$ARCH"
 
-      - name: Install Alpine build tools
-        if: startsWith(matrix.image, 'alpine') && env.SKIP_BUILD != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends buildah fuse-overlayfs
+      # Uploaded only when every gate above passed; publish treats a missing
+      # digest as "not tested" and refuses to push that image.
+      - name: Upload results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: result-${{ matrix.image }}-${{ matrix.flavor }}-${{ matrix.arch }}
+          path: |
+            dist/*.digest
+            dist/sbom-*.json
+            dist/grype-*.json
+            dist/trivy-*.json
+            dist/dockle-*.json
+          retention-days: 30
 
-      - name: Install apko + melange (Alpine only)
-        if: startsWith(matrix.image, 'alpine') && env.SKIP_BUILD != 'true'
-        run: |
-          APKO_VERSION=1.2.7
-          APKO_FILE="apko_${APKO_VERSION}_linux_amd64.tar.gz"
-          curl -sfL "https://github.com/chainguard-dev/apko/releases/download/v${APKO_VERSION}/${APKO_FILE}" \
-            -o "${APKO_FILE}"
-          echo "5151b4a79e9a7fd495d5f7591cb25293b747bc9e4eb5929643ba80701bfa8153 ${APKO_FILE}" | sha256sum -c
-          sudo tar -C . -xzf "${APKO_FILE}" apko_${APKO_VERSION}_linux_amd64/apko
-          sudo cp apko_${APKO_VERSION}_linux_amd64/apko /usr/local/bin/apko
-          sudo chmod +x /usr/local/bin/apko
+  publish:
+    needs: [plan, image]
+    # Publish whatever passed, even if another image failed.
+    if: >-
+      !cancelled() && needs.plan.result == 'success' &&
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    name: publish ${{ matrix.image }} ${{ matrix.flavor }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    concurrency:
+      group: publish-${{ matrix.image }}-${{ matrix.flavor }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.publish) }}
+    env:
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-          MELANGE_VERSION=0.50.3
-          MELANGE_FILE="melange_${MELANGE_VERSION}_linux_amd64.tar.gz"
-          curl -sfL "https://github.com/chainguard-dev/melange/releases/download/v${MELANGE_VERSION}/${MELANGE_FILE}" \
-            -o "${MELANGE_FILE}"
-          echo "aa64af564fd8fc50ed251d83c2b00ee5a9d9c159cb5f722c0af975b337bf0a85 ${MELANGE_FILE}" | sha256sum -c
-          sudo tar -C . -xzf "${MELANGE_FILE}" melange_${MELANGE_VERSION}_linux_amd64/melange
-          sudo cp melange_${MELANGE_VERSION}_linux_amd64/melange /usr/local/bin/melange
-          sudo chmod +x /usr/local/bin/melange
+      - name: Download tested results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: result-${{ matrix.image }}-${{ matrix.flavor }}-*
+          path: dist
+          merge-multiple: true
 
-      - name: Install Ubuntu build tools
-        if: startsWith(matrix.image, 'ubuntu') && env.SKIP_BUILD != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends debootstrap buildah fuse-overlayfs xz-utils
+      - name: Install tools
+        run: scripts/install-tools.sh apko cosign
 
-      - name: Build image
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          chmod +x scripts/build.sh builders/*.sh
-          echo "${{ secrets.MELANGE_SIGNING_KEY }}" > melange/xilasec@hardned-images.rsa
-          chmod 600 melange/xilasec@hardned-images.rsa
-          ./scripts/build.sh "${{ matrix.image }}" "${{ env.DATE }}"
-          rm -f melange/xilasec@hardned-images.rsa
-
-      - name: Generate SBOM
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          chmod +x scripts/sbom.sh
-          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
-          ./scripts/sbom.sh "$TAG" "dist/${{ matrix.image }}.tar"
-
-      - name: Scan image
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          chmod +x scripts/scan.sh
-          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
-          ./scripts/scan.sh "$TAG" "dist/${{ matrix.image }}.tar"
-
-      - name: Verify policy
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          chmod +x scripts/verify.sh
-          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
-          ./scripts/verify.sh "$TAG"
-
-      - name: Compliance check
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          chmod +x scripts/compliance.sh
-          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
-          ./scripts/compliance.sh "$TAG"
-
-      # Functional gate before publishing: load the image into Docker (the
-      # runtime on this runner) and assert the Node 24 runtime actually works
-      # and runs as a non-root user. Runs only for the node24 variants.
-      - name: Smoke test
-        if: contains(matrix.image, 'node24') && env.SKIP_BUILD != 'true'
-        run: |
-          chmod +x scripts/smoke.sh
-          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
-          ./scripts/smoke.sh "dist/${{ matrix.image }}.tar" "$TAG" v24
-
-      - name: Log in to GHCR
-        if: env.SKIP_BUILD != 'true'
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push image
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          if command -v fuse-overlayfs &>/dev/null && [ -c /dev/fuse ]; then
-            BSTORE=(--storage-driver overlay --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs)
-          else
-            BSTORE=(--storage-driver vfs)
-          fi
-          TAG="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ env.DATE }}"
-          LATEST="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:latest"
-          # Import the built docker-archive into buildah storage and tag both
-          # date + latest. Both build paths emit a docker-archive and neither
-          # leaves the image in buildah storage (apko never does; ubuntu.sh only
-          # writes the tar), so this import is what makes the push work at all.
-          IMG_ID=$(sudo buildah "${BSTORE[@]}" pull "docker-archive:dist/${{ matrix.image }}.tar" | tail -n1)
-          sudo buildah "${BSTORE[@]}" tag "$IMG_ID" "$TAG" "$LATEST"
-          sudo buildah "${BSTORE[@]}" push --authfile "$HOME/.docker/config.json" --format oci \
-            --digestfile /tmp/image-digest.txt "$TAG" "docker://$TAG"
-          sudo buildah "${BSTORE[@]}" push --authfile "$HOME/.docker/config.json" --format oci \
-            "$LATEST" "docker://$LATEST"
-          echo "IMAGE_DIGEST=$(cat /tmp/image-digest.txt)" >> "$GITHUB_ENV"
+      - name: Push, verify, sign, attest
+        id: push
+        run: scripts/publish.sh push ${{ matrix.image }} ${{ matrix.flavor }}
 
-      - name: Sign and attest
-        if: env.SKIP_BUILD != 'true'
-        run: |
-          chmod +x scripts/sign.sh
-          REPO="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}"
-          ./scripts/sign.sh "${REPO}@${IMAGE_DIGEST}"
-        env:
-          COSIGN_EXPERIMENTAL: "1"
+      - name: Build provenance
+        if: steps.push.outputs.published == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.push.outputs.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Promote ${{ matrix.flavor }} tag
+        if: steps.push.outputs.published == 'true'
+        run: scripts/publish.sh promote ${{ matrix.image }} ${{ matrix.flavor }} "${{ steps.push.outputs.digest }}"

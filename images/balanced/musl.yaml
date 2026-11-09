@@ -1,0 +1,12 @@
+# Hardened busybox shell on musl. busybox (statically linked, network daemons
+# and suid support removed) and musl are built from source by melange; see
+# melange/busybox.yaml and melange/musl.yaml.
+include: flavors/musl.yaml
+
+contents:
+  packages:
+    - busybox@local
+    - musl@local
+
+entrypoint:
+  command: /bin/sh

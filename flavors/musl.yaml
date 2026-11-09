@@ -1,0 +1,43 @@
+# musl flavor: Alpine Linux v3.23.
+#
+# Every image pulls this file in via `include: flavors/musl.yaml`, so the
+# Alpine release, trust anchors, local melange repository, non-root account and
+# target architectures are defined exactly once. Bumping Alpine means editing
+# this file and re-running `make lock`.
+#
+# Keys are vendored in keys/ (cross-checked against alpine/aports) instead of
+# fetched over the network at build time.
+contents:
+  keyring:
+    - keys/alpine-devel@lists.alpinelinux.org-4a6a0840.rsa.pub   # x86_64
+    - keys/alpine-devel@lists.alpinelinux.org-5261cecb.rsa.pub   # x86_64
+    - keys/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub   # x86_64
+    - keys/alpine-devel@lists.alpinelinux.org-58199dcc.rsa.pub   # aarch64
+    - keys/alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub   # aarch64
+    - keys/xilasec@hardned-images.rsa.pub                        # our melange packages
+  repositories:
+    - https://dl-cdn.alpinelinux.org/alpine/v3.23/main
+    - https://dl-cdn.alpinelinux.org/alpine/v3.23/community
+    # Packages built from melange/ are only installed when requested as
+    # `<name>@local`; untagged names always resolve from Alpine.
+    - '@local ./packages/musl'
+  packages:
+    # /etc/os-release lets syft/grype/trivy identify the distro and match
+    # against Alpine's secdb (with backported fixes) instead of raw NVD ranges.
+    # alpine-baselayout-data is deliberately absent: its /etc/shadow ships
+    # root with an empty password. apko writes passwd/group from `accounts`.
+    - alpine-release
+
+accounts:
+  run-as: "1000"
+  users:
+    - username: appuser
+      uid: 1000
+      gid: 1000
+  groups:
+    - groupname: appuser
+      gid: 1000
+
+archs:
+  - x86_64
+  - aarch64

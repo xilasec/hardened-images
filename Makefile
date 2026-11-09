@@ -1,70 +1,69 @@
-DATE   := $(shell date -u +%Y%m%d)
-BUILD  ?= ubuntu-noble
-IMAGE  := ghcr.io/xilasec/$(BUILD):$(DATE)
-LATEST := ghcr.io/xilasec/$(BUILD):latest
-EXPECT ?=
+# Local entry points; CI runs the same scripts (.github/workflows/build.yaml).
+#
+#   make all IMAGE=node24 FLAVOR=musl            # host arch
+#   make all IMAGE=node24 FLAVOR=glibc ARCH=arm64
+#   make every                                   # all images x flavors, host arch
 
-# Build output dir (OCI archive) and debootstrap scratch dir. Override both to a
-# writable native path when the repo is mounted read-only (e.g. inside Lima):
-#   make build BUILD=ubuntu-node24 OUTDIR=/var/tmp/dist WORKDIR=/var/tmp/work
-OUTDIR  ?= dist
-WORKDIR ?= tmp
-export OUTDIR WORKDIR
-TAR    := $(OUTDIR)/$(BUILD).tar
+IMAGE    ?= node24
+FLAVOR   ?= musl
+ARCH     ?= host
+REGISTRY ?= ghcr.io/xilasec
+OUTDIR   ?= dist
+DOCKER   ?= docker
+export REGISTRY OUTDIR DOCKER
 
-# Target arch for the build. Empty => host arch (amd64 on x86, arm64 on Apple
-# Silicon). Override with `make build ARCH=arm64 ...` or `ARCH=arm64 make ...`.
-ARCH   ?=
-export ARCH
+ARGS   := $(IMAGE) $(FLAVOR) $(ARCH)
+IMAGES := $(notdir $(patsubst %/,%,$(wildcard images/*/)))
 
-# Pass storage driver as flags to avoid touching /etc/containers/storage.conf
-FUSE   := $(shell command -v fuse-overlayfs 2>/dev/null && test -c /dev/fuse && echo yes)
-ifdef FUSE
-  BSTORE := --storage-driver overlay --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs
-else
-  BSTORE := --storage-driver vfs
-endif
+.PHONY: tools packages lock build repro sbom scan verify compliance test all every \
+        publish policy-test matrix clean
+
+tools:
+	scripts/install-tools.sh apko melange syft grype trivy opa dockle cosign
+
+packages:
+	scripts/packages.sh $(FLAVOR) $(ARCH)
+
+lock:
+	scripts/lock.sh $(IMAGE) $(FLAVOR)
 
 build:
-	sudo rm -rf $(WORKDIR)
-	./scripts/build.sh $(BUILD) $(DATE) $(BSTORE)
+	scripts/build.sh $(ARGS)
+
+repro:
+	scripts/repro.sh $(ARGS)
 
 sbom:
-	./scripts/sbom.sh $(IMAGE) $(TAR)
+	scripts/sbom.sh $(ARGS)
 
 scan:
-	./scripts/scan.sh $(IMAGE) $(TAR)
+	scripts/scan.sh $(ARGS)
 
 verify:
-	./scripts/verify.sh $(IMAGE)
+	scripts/verify.sh $(ARGS)
 
 compliance:
-	./scripts/compliance.sh $(IMAGE)
+	scripts/compliance.sh $(ARGS)
 
-# Functional smoke test (e.g. `make smoke BUILD=ubuntu-node24 EXPECT=v24`).
-smoke:
-	./scripts/smoke.sh $(TAR) $(IMAGE) $(EXPECT)
+test:
+	scripts/test.sh $(ARGS)
 
-sign:
-	./scripts/sign.sh $(IMAGE)
+all: build repro sbom scan verify compliance test
 
-load:
-	sudo docker load -i $(TAR)
+every:
+	@set -e; for i in $(IMAGES); do for f in musl glibc; do \
+	  $(MAKE) --no-print-directory all IMAGE=$$i FLAVOR=$$f ARCH=$(ARCH); \
+	done; done
 
-# Open a shell in the built image. Loads the archive first and resolves the ref
-# docker actually loaded (apko tags single-arch images with an -<arch> suffix).
-shell:
-	@REF=$$(sudo docker load -i $(TAR) | sed -n 's/^Loaded image: //p' | head -1); \
-	echo "[+] entering $$REF"; \
-	sudo docker run --rm -it --entrypoint /bin/sh "$$REF"
+# Needs dist/ results for every arch of the flavor (CI provides them).
+publish:
+	scripts/publish.sh push $(IMAGE) $(FLAVOR)
 
-# Back-compat alias for `shell`.
-test: shell
+policy-test:
+	opa test policies -v
 
-rmi:
-	sudo buildah $(BSTORE) rmi $(IMAGE) $(LATEST) 2>/dev/null || true
+matrix:
+	scripts/matrix.sh
 
-clean-json:
-	rm -f $(OUTDIR)/sbom-*.json $(OUTDIR)/scan-*.json $(OUTDIR)/trivy-*.json $(OUTDIR)/compliance-*.json
-
-all: build sbom scan verify compliance clean-json
+clean:
+	rm -rf $(OUTDIR)

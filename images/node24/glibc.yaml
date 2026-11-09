@@ -1,0 +1,13 @@
+# Node.js 24 (LTS) runtime on glibc, straight from Wolfi's signed index. node
+# lands at /usr/bin/node, same path as the musl flavor. No npm: it is a
+# build-time tool and its bundled dependencies carry their own CVE stream;
+# install dependencies in a build stage and copy node_modules in.
+include: flavors/glibc.yaml
+
+contents:
+  packages:
+    - ca-certificates-bundle
+    - nodejs-24
+
+entrypoint:
+  command: /usr/bin/node

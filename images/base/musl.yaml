@@ -1,0 +1,7 @@
+# Minimal musl runtime: libc + CA bundle, no shell, no package manager.
+include: flavors/musl.yaml
+
+contents:
+  packages:
+    - musl
+    - ca-certificates-bundle

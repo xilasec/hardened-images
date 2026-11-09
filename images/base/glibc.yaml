@@ -1,0 +1,7 @@
+# Minimal glibc runtime: libc + CA bundle, no shell, no package manager.
+include: flavors/glibc.yaml
+
+contents:
+  packages:
+    - glibc
+    - ca-certificates-bundle

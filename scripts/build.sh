@@ -1,48 +1,35 @@
 #!/bin/bash
+# Build one image flavor for one architecture from its lockfile.
+#
+# Usage: scripts/build.sh <image> <flavor> [arch]
+#
+# Output: $OUTDIR/<image>-<flavor>-<arch>.tar (docker-loadable) and
+#         $OUTDIR/<image>-<flavor>-<arch>.digest (manifest digest). The digest
+#         is what scan/test results are bound to; publish refuses to push
+#         anything whose digest differs.
 set -euo pipefail
+cd "$(dirname "$0")/.."
+. scripts/lib.sh
 
-IMAGE=$1
-DATE=${2:-$(date -u +%Y%m%d)}
+IMAGE=${1:?usage: build.sh <image> <flavor> [arch]}
+FLAVOR=${2:?usage: build.sh <image> <flavor> [arch]}
+ARCH=$(apk_arch "${3:-host}")
+check_flavor "$FLAVOR"
+CFG=$(image_config "$IMAGE" "$FLAVOR")
+LOCK=$(image_lock "$IMAGE" "$FLAVOR")
+[ -f "$LOCK" ] || die "missing $LOCK (run scripts/lock.sh $IMAGE $FLAVOR)"
 
-# Where the OCI archive is written. Override with OUTDIR to build on a writable
-# native filesystem - e.g. inside a Lima VM where the repo is mounted read-only:
-#   OUTDIR=/var/tmp/dist WORKDIR=/var/tmp/work make build BUILD=...
-OUTDIR=${OUTDIR:-dist}
+STEM=$(stem "$IMAGE" "$FLAVOR" "$ARCH")
 mkdir -p "$OUTDIR"
+TAR="$OUTDIR/$STEM.tar"
+rm -f "$TAR"
 
-case $IMAGE in
-  alpine-*)
-    CONFIG="images/alpine/${IMAGE#alpine-}.yaml"
-    OUT="$OUTDIR/${IMAGE}.tar"
-    TAG="ghcr.io/xilasec/${IMAGE}:${DATE}"
-    # Only build local melange packages when the image actually consumes them
-    # (i.e. references the @local repo). Images that use stock upstream packages
-    # - like node24 - skip melange entirely, so they build faster and don't
-    # require the melange signing key.
-    if grep -q '@local' "$CONFIG"; then
-      echo "[+] Building local packages with melange"
-      ./builders/melange.sh
-    fi
-    echo "[+] Building $TAG"
-    ./builders/alpine.sh "$CONFIG" "$OUT" "$TAG"
-    ;;
+echo "[+] Building $REGISTRY/$IMAGE:$FLAVOR ($ARCH) from $LOCK"
+# --sbom=false: the SBOM of record is produced by syft from this archive
+# (scripts/sbom.sh) and attested at publish time.
+apko build --sbom=false --lockfile "$LOCK" --arch "$ARCH" \
+  ${APKO_CACHE_DIR:+--cache-dir "$APKO_CACHE_DIR"} \
+  "$CFG" "$REGISTRY/$IMAGE:$FLAVOR" "$TAR"
 
-  ubuntu-*)
-    CONFIG="images/ubuntu/${IMAGE#ubuntu-}.yaml"
-    OUT="$OUTDIR/${IMAGE}.tar"
-    TAG="ghcr.io/xilasec/${IMAGE}:${DATE}"
-    echo "[+] Building $TAG"
-    ./builders/ubuntu.sh "$CONFIG" "$OUT" "$TAG"
-    ;;
-
-  *)
-    echo "Unknown image type: $IMAGE"
-    exit 1
-    ;;
-esac
-
-# Both builders already write the OCI archive to $OUT themselves: apko writes it
-# directly, and ubuntu.sh pushes it from buildah storage. The previous trailing
-# `buildah push` here was redundant for ubuntu and broke the alpine path (apko
-# images are never in buildah storage), so it's gone.
-echo "[+] Build complete: $OUT"
+archive_manifest_digest "$TAR" > "$OUTDIR/$STEM.digest"
+echo "[+] $TAR $(cat "$OUTDIR/$STEM.digest")"
