@@ -1,48 +1,23 @@
 #!/bin/bash
+# Policy gate (policies/vulnerability.rego) over both scanner reports.
+# Usage: scripts/verify.sh <image> <flavor> [arch]
 set -euo pipefail
+cd "$(dirname "$0")/.."
+. scripts/lib.sh
 
-IMAGE=$1
-
-OUTDIR=${OUTDIR:-dist}
-ARTIFACT=$(echo "${IMAGE##*/}" | tr ':' '-')
-SCAN_REPORT="${OUTDIR}/scan-${ARTIFACT}.json"
-TRIVY_REPORT="${OUTDIR}/trivy-${ARTIFACT}.json"
-
-echo "[+] Running policy checks against $SCAN_REPORT"
-
-RESULT=$(opa eval \
-  --input "$SCAN_REPORT" \
-  --data policies \
-  --format raw \
-  "data.policies.vuln.allow")
-
-if [ "$RESULT" != "true" ]; then
-  echo "[-] Policy check FAILED | violations:"
-  opa eval \
-    --input "$SCAN_REPORT" \
-    --data policies \
-    --format pretty \
-    "data.policies.vuln.violation"
-  exit 1
-fi
-
-echo "[+] Running policy checks against ${TRIVY_REPORT}"
-
-RESULT=$(opa eval \
-  --input "${TRIVY_REPORT}" \
-  --data policies \
-  --format raw \
-  "data.policies.vuln.allow")
-
-if [ "$RESULT" != "true" ]; then
-  echo "[-] Policy check FAILED | violations:"
-  opa eval \
-    --input "${TRIVY_REPORT}" \
-    --data policies \
-    --format pretty \
-    "data.policies.vuln.violation"
-  exit 1
-fi
-
-
-echo "[+] Policy check PASSED"
+STEM=$(stem "${1:?usage: verify.sh <image> <flavor> [arch]}" "${2:?}" "${3:-host}")
+rc=0
+for report in "$OUTDIR/grype-$STEM.json" "$OUTDIR/trivy-$STEM.json"; do
+  [ -f "$report" ] || die "missing $report (run scripts/scan.sh first)"
+  result=$(opa eval --input "$report" --data policies --format json 'data.policies.vuln')
+  allow=$(jq -r '.result[0].expressions[0].value.allow' <<<"$result")
+  jq -r '.result[0].expressions[0].value.warning[]? | "    warning: " + .' <<<"$result"
+  if [ "$allow" = true ]; then
+    echo "[+] policy passed: $report"
+  else
+    echo "[-] policy failed: $report"
+    jq -r '.result[0].expressions[0].value.violation[]? | "    " + .' <<<"$result"
+    rc=1
+  fi
+done
+exit $rc

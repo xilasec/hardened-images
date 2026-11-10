@@ -1,0 +1,72 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/xilasec/hardened-images/vex/busybox",
+  "author": "xilasec",
+  "timestamp": "2026-11-09T00:00:00Z",
+  "version": 3,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2026-38752",
+        "aliases": [
+          "GHSA-fj27-x67r-v4g5"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:apk/alpine/busybox@1.38.0-r0"
+        },
+        {
+          "@id": "pkg:apk/wolfi/busybox@1.38.0-r0"
+        }
+      ],
+      "status": "fixed",
+      "status_notes": "Patched at build time: melange/busybox/CVE-2026-38752.patch (melange/busybox.yaml)"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-38753"
+      },
+      "products": [
+        {
+          "@id": "pkg:apk/alpine/busybox@1.38.0-r0"
+        },
+        {
+          "@id": "pkg:apk/wolfi/busybox@1.38.0-r0"
+        }
+      ],
+      "status": "fixed",
+      "status_notes": "Patched at build time: melange/busybox/CVE-2026-38753.patch (melange/busybox.yaml)"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-38754"
+      },
+      "products": [
+        {
+          "@id": "pkg:apk/alpine/busybox@1.38.0-r0"
+        },
+        {
+          "@id": "pkg:apk/wolfi/busybox@1.38.0-r0"
+        }
+      ],
+      "status": "fixed",
+      "status_notes": "Patched at build time: melange/busybox/CVE-2026-38754.patch (melange/busybox.yaml)"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-38755"
+      },
+      "products": [
+        {
+          "@id": "pkg:apk/alpine/busybox@1.38.0-r0"
+        },
+        {
+          "@id": "pkg:apk/wolfi/busybox@1.38.0-r0"
+        }
+      ],
+      "status": "fixed",
+      "status_notes": "Patched at build time: melange/busybox/CVE-2026-38755.patch (melange/busybox.yaml)"
+    }
+  ]
+}

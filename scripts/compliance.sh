@@ -1,31 +1,33 @@
 #!/bin/bash
+# OCI conformance + CIS checks (dockle).
+# Usage: scripts/compliance.sh <image> <flavor> [arch]
 set -euo pipefail
+cd "$(dirname "$0")/.."
+. scripts/lib.sh
 
-IMAGE=$1
+STEM=$(stem "${1:?usage: compliance.sh <image> <flavor> [arch]}" "${2:?}" "${3:-host}")
+TAR="$OUTDIR/$STEM.tar"
 
-OUTDIR=${OUTDIR:-dist}
-ARTIFACT=$(echo "${IMAGE##*/}" | tr ':' '-')
-IMAGE_NAME=$(echo "${IMAGE##*/}" | cut -d: -f1)
-# Both builders already write a docker-archive tar that dockle reads directly,
-# so there's no buildah-storage round-trip (which never worked for apko images,
-# as those are never imported into buildah storage).
-TAR="${OUTDIR}/${IMAGE_NAME}.tar"
-REPORT="${OUTDIR}/compliance-${ARTIFACT}.json"
+# OCI media types only (no Docker v2 types), standard annotations present.
+m=$(tar -xOf "$TAR" index.json | jq -r '.manifests[0].digest')
+oci=$(tar -xOf "$TAR" "$m" | jq -r '
+  [ (.mediaType == "application/vnd.oci.image.manifest.v1+json"),
+    (.config.mediaType == "application/vnd.oci.image.config.v1+json"),
+    (all(.layers[]; .mediaType | startswith("application/vnd.oci.image.layer.v1.tar"))),
+    (.annotations["org.opencontainers.image.title"] // "" | length > 0),
+    (.annotations["org.opencontainers.image.source"] // "" | length > 0),
+    (.annotations["org.opencontainers.image.created"] // "" | length > 0) ] | all')
+[ "$oci" = true ] || die "$STEM is not an OCI image with standard annotations"
+echo "[+] OCI media types and annotations OK"
 
-echo "[+] Running CIS compliance check for $IMAGE ($TAR)"
-dockle \
-  --exit-code 1 \
-  --exit-level warn \
-  --format json \
-  --accept-key DKL-LI-0001 \
-  --accept-key CIS-DI-0005 \
-  --accept-key CIS-DI-0006 \
-  --input "$TAR" | tee "$REPORT"
-# DKL-LI-0001: no /etc/shadow is intentional - scratch-built minimal images have no
-#              password-based auth; the absence of the file is more secure than a locked one.
-# CIS-DI-0005: Docker Content Trust is Docker-daemon-specific; we sign with cosign
-#              (Sigstore keyless) which is stronger and not daemon-dependent.
-# CIS-DI-0006: HEALTHCHECK belongs to the application image layer, not the base image.
-#              Consuming teams add it when they build on top of this golden base.
-
-echo "[+] Compliance check PASSED"
+REPORT="$OUTDIR/dockle-$STEM.json"
+echo "[+] dockle $STEM"
+# Fails on WARN and above. The remaining INFO findings are expected for base
+# images: CIS-DI-0005 (Docker Content Trust; images are cosign-signed instead)
+# and CIS-DI-0006 (HEALTHCHECK belongs to the application image).
+rc=0
+dockle --exit-code 1 --exit-level warn --format json --output "$REPORT" \
+  --input "$TAR" || rc=$?
+jq -r '.details[]? | "    " + .level + " " + .code + ": " + .title + " (" + (.alerts | join("; ")) + ")"' "$REPORT"
+[ "$rc" -eq 0 ] || die "compliance failed for $STEM"
+echo "[+] compliance passed"

@@ -1,0 +1,16 @@
+# Hardened busybox shell on glibc. busybox (network daemons and suid support
+# removed) is built from source by melange; see melange/busybox.yaml. glibc
+# comes from Wolfi.
+include: flavors/glibc.yaml
+
+contents:
+  packages:
+    - busybox@local
+    - glibc
+
+entrypoint:
+  command: /bin/sh
+
+annotations:
+  org.opencontainers.image.title: balanced
+  org.opencontainers.image.description: "Hardened busybox shell on glibc"

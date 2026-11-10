@@ -1,6 +1,6 @@
 package:
   name: busybox
-  version: 1.37.0
+  version: 1.38.0
   epoch: 0
   description: Size-optimized toolbox of UNIX utilities
   copyright:
@@ -8,30 +8,43 @@ package:
   checks:
     disabled:
       - usrmerge
-
+# Flavor-neutral: repositories and keyrings come from flavors/<flavor>.yaml via
+# scripts/packages.sh, so the same recipe builds against Alpine (musl) and
+# Wolfi (glibc). Only package names that exist in both distros belong here.
 environment:
   contents:
-    keyring:
-      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
-    repositories:
-      - https://dl-cdn.alpinelinux.org/alpine/v3.23/main/
     packages:
-      - alpine-baselayout-data
       - busybox
       - build-base
       - linux-headers
       - ca-certificates-bundle
       - ncurses-dev
       - perl
-
 pipeline:
   - uses: fetch
     with:
-      uri: https://distfiles.alpinelinux.org/distfiles/v3.24/busybox-${{package.version}}.tar.bz2
-      expected-sha256: 3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4
+      uri: https://busybox.net/downloads/busybox-${{package.version}}.tar.bz2
+      expected-sha256: 34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2
+  # Security patches carried by Wolfi for 1.38.0, copied verbatim from
+  # wolfi-dev/os@46a6b6ababca8e7c95e01db5fa8a50459556ee5c (busybox/), in the
+  # same order. Re-sync from there when bumping; drop patches upstream merged.
   - uses: patch
     with:
-      patches: ./CVE-2024-58251.patch ./CVE-2025-46394.patch ./CVE-2025-60876.patch
+      patches: >-
+        ./CVE-2022-28391-1.patch
+        ./CVE-2022-28391-2.patch
+        ./0001-tar-fix-TOCTOU-symlink-race-condition.patch
+        ./0037-awk.c-fix-CVE-2023-42366-bug-15874.patch
+        ./CVE-2024-58251-2.patch
+        ./CVE-2025-46394.patch
+        ./CVE-2025-60876.patch
+        ./archival-disallow-path-traversals-CVE-2023-39810.patch
+        ./0001-tar-strip-unsafe-hardlink-components-GNU-tar-does-th.patch
+        ./0002-tar-only-strip-unsafe-components-from-hardlinks-not-.patch
+        ./CVE-2026-38753.patch
+        ./CVE-2026-38752.patch
+        ./CVE-2026-38754.patch
+        ./CVE-2026-38755.patch
   - runs: |
       rm -rf .config/
       make distclean
@@ -39,7 +52,6 @@ pipeline:
       sed -i \
         -e 's/CONFIG_TC=y/CONFIG_TC=n/' \
         -e 's/CONFIG_FEATURE_TC_INGRESS=y/CONFIG_FEATURE_TC_INGRESS=n/' \
-        -e 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' \
         -e 's/CONFIG_FEATURE_SUID=y/CONFIG_FEATURE_SUID=n/' \
         -e 's/CONFIG_FEATURE_SUID_CONFIG=y/CONFIG_FEATURE_SUID_CONFIG=n/' \
         -e 's/CONFIG_INETD=y/CONFIG_INETD=n/' \
@@ -51,8 +63,15 @@ pipeline:
         -e 's/CONFIG_LOGIN=y/CONFIG_LOGIN=n/' \
         -e 's/CONFIG_SU=y/CONFIG_SU=n/' \
         .config
+      # musl: link fully static (no runtime libc dependency). glibc: static
+      # glibc breaks NSS lookups, so link dynamically against the image libc.
+      if ls /lib/ld-musl-* >/dev/null 2>&1; then
+        sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
+        export LDFLAGS="-static -Wl,-z,relro -Wl,-z,now"
+      else
+        export LDFLAGS="-Wl,-z,relro -Wl,-z,now"
+      fi
       export CFLAGS="-Os -fstack-protector-all -D_FORTIFY_SOURCE=2"
-      export LDFLAGS="-static -Wl,-z,relro -Wl,-z,now"
       make -j"$(nproc)"
   - runs: |
       make CONFIG_PREFIX="${{targets.destdir}}" install

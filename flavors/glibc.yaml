@@ -1,0 +1,40 @@
+# glibc flavor: Wolfi.
+#
+# Every image pulls this file in via `include: flavors/glibc.yaml`, so the
+# trust anchors, local melange repository, non-root account and target
+# architectures are defined exactly once. Wolfi is a rolling distro that keeps
+# every published package version, so lockfiles stay buildable indefinitely.
+contents:
+  keyring:
+    - keys/wolfi-signing.rsa.pub
+    - keys/xilasec@hardned-images.rsa.pub   # our melange packages
+  repositories:
+    - https://packages.wolfi.dev/os
+    # Packages built from melange/ are only installed when requested as
+    # `<name>@local`; untagged names always resolve from Wolfi.
+    - '@local ./packages/glibc'
+  packages:
+    # /etc/os-release lets syft/grype/trivy match against Wolfi's secdb.
+    - wolfi-baselayout
+
+accounts:
+  run-as: "1000"
+  users:
+    - username: appuser
+      uid: 1000
+      gid: 1000
+  groups:
+    - groupname: appuser
+      gid: 1000
+
+archs:
+  - x86_64
+  - aarch64
+
+# Standard OCI annotations (also set as config labels). Static on purpose:
+# builds run with --vcs=false so digests do not depend on the checkout.
+annotations:
+  org.opencontainers.image.vendor: xilasec
+  org.opencontainers.image.source: https://github.com/xilasec/hardened-images
+  org.opencontainers.image.url: https://github.com/xilasec/hardened-images
+  org.opencontainers.image.documentation: https://github.com/xilasec/hardened-images#readme

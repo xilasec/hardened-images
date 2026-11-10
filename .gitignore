@@ -3,15 +3,10 @@
 Thumbs.db
 .env
 .env.local
-*.tar
-sbom-*.json
-scan-*.json
-trivy-*.json
-compliance-*.json
-*.grype.json
+
+# Build output (archives, digests, SBOMs, scan reports)
 dist/
-!pkg/.gitkeep
-pkg/*
+*.tar
 
 # IDE
 .vscode/
@@ -20,11 +15,10 @@ pkg/*
 # Temporary files
 tmp/
 *.tmp
-
-# Coverage
-coverage/
-
-# Cache
 .cache/
 
+# melange signing key: CI uses the MELANGE_SIGNING_KEY secret
 melange/xilasec@hardned-images.rsa
+
+# Lockfiles are generated per run and attested to the published image
+images/*/*.lock.json
