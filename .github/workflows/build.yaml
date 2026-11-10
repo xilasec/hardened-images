@@ -90,6 +90,9 @@ jobs:
       attestations: write
     strategy:
       fail-fast: false
+      # GHCR denies a second job pushing to a package created seconds earlier
+      # by its sibling. Serial costs wall time only, not minutes.
+      max-parallel: 1
       matrix:
         include: ${{ fromJSON(needs.check.outputs.publish) }}
     env:
