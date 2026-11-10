@@ -30,22 +30,38 @@ ghcr.io/xilasec/<image>:<flavor>-YYYY-MM-DD   immutable
 
 ## Pipeline
 
-- **Daily**: rescan published images. Only images with fixable findings are
-  re-locked and rebuilt. Identical rebuilds are skipped.
+- **Daily 02:00**: bump our melange recipes to the latest upstream release.
+  A bump opens a PR, builds the packages, gates the affected images, merges
+  and publishes, all without a person.
+- **Daily 04:00**: rescan published images. Only images with fixable findings
+  are re-locked and rebuilt. Identical rebuilds are skipped.
 - **Push to main**: rebuild all, publish only changed digests.
 - **PR**: gate everything, publish nothing.
 
-Gates: build from a fresh lockfile, syft SBOM, grype + trivy with
-`vex/`, OPA policy (Critical or fixable High fails), dockle, functional test
-(`images/<name>/test.sh`, arm64 via qemu).
+Gates:
+
+- Build from a fresh lockfile, syft SBOM.
+- grype + trivy with `vex/`. Packages we build are also matched against the
+  other distro's advisories, since their own distro's can miss newer versions.
+- Policy (`policies/vulnerability.rego`): Critical, or High that is in CISA
+  KEV or scores CVSS > 8.0, fails. Anything else warns and is published as a
+  VEX `affected` statement.
+- OCI media types and annotations, ELF hardening (`scripts/harden.sh`: exec
+  stack, W+X segments or text relocations fail; PIE, RELRO and stack
+  protector are reported), dockle.
+- Functional test (`images/<name>/test.sh`), run read-only, with all
+  capabilities dropped and no-new-privileges. arm64 via qemu.
 
 Publish rebuilds from the tested lockfile and stops unless the digests match.
 Then it signs with cosign (keyless), attests SBOM, VEX, lockfile and SLSA
-provenance, and moves `<flavor>` last.
+provenance, and moves `<flavor>` last. Failed daily runs and unfixable
+blocking findings open an issue.
 
-Patched packages live in `melange/`. `packages.yaml` builds them only when
-their inputs change and commits them to `packages/`. Bump `package.epoch` when
-changing a recipe.
+We build what the distro ships too late (`melange/`, per flavor in
+`melange/flavors.yaml`): busybox (hardened), plus sqlite and nghttp2 for musl.
+They replace the distro's packages everywhere, also as dependencies (Alpine's
+nodejs links to our sqlite). `packages.yaml` builds a recipe only when its
+inputs change. Bump `package.epoch` when changing a recipe by hand.
 
 ## Verify
 
@@ -55,6 +71,7 @@ ID=https://github.com/xilasec/hardened-images/.github/workflows/build.yaml@refs/
 cosign verify "$IMG" --certificate-identity "$ID" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 gh attestation verify "oci://$IMG" --repo xilasec/hardened-images
+trivy image --vex oci "$IMG"   # applies our published VEX
 ```
 
 ## Local

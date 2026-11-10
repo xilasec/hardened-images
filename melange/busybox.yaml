@@ -1,13 +1,20 @@
 package:
   name: busybox
   version: 1.38.0
-  epoch: 0
+  epoch: 1
   description: Size-optimized toolbox of UNIX utilities
   copyright:
     - license: GPL-2.0-only
   checks:
     disabled:
       - usrmerge
+  # Ships /bin/sh, so it also replaces the distro's busybox-binsh when another
+  # package (e.g. Alpine's ca-certificates) needs a shell.
+  dependencies:
+    provider-priority: 200
+    provides:
+      - /bin/sh
+      - cmd:sh=${{package.full-version}}
 # Flavor-neutral: repositories and keyrings come from flavors/<flavor>.yaml via
 # scripts/packages.sh, so the same recipe builds against Alpine (musl) and
 # Wolfi (glibc). Only package names that exist in both distros belong here.
@@ -77,3 +84,9 @@ pipeline:
       make CONFIG_PREFIX="${{targets.destdir}}" install
 
   - uses: strip
+
+# Not bumped automatically: the patch set is synced from wolfi-dev/os by hand.
+update:
+  enabled: false
+  release-monitor:
+    identifier: 230

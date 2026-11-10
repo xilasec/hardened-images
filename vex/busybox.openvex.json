@@ -14,10 +14,10 @@
       },
       "products": [
         {
-          "@id": "pkg:apk/alpine/busybox@1.38.0-r0"
+          "@id": "pkg:apk/alpine/busybox@1.38.0-r1"
         },
         {
-          "@id": "pkg:apk/wolfi/busybox@1.38.0-r0"
+          "@id": "pkg:apk/wolfi/busybox@1.38.0-r1"
         }
       ],
       "status": "fixed",
@@ -29,10 +29,10 @@
       },
       "products": [
         {
-          "@id": "pkg:apk/alpine/busybox@1.38.0-r0"
+          "@id": "pkg:apk/alpine/busybox@1.38.0-r1"
         },
         {
-          "@id": "pkg:apk/wolfi/busybox@1.38.0-r0"
+          "@id": "pkg:apk/wolfi/busybox@1.38.0-r1"
         }
       ],
       "status": "fixed",
@@ -44,10 +44,10 @@
       },
       "products": [
         {
-          "@id": "pkg:apk/alpine/busybox@1.38.0-r0"
+          "@id": "pkg:apk/alpine/busybox@1.38.0-r1"
         },
         {
-          "@id": "pkg:apk/wolfi/busybox@1.38.0-r0"
+          "@id": "pkg:apk/wolfi/busybox@1.38.0-r1"
         }
       ],
       "status": "fixed",
@@ -59,10 +59,10 @@
       },
       "products": [
         {
-          "@id": "pkg:apk/alpine/busybox@1.38.0-r0"
+          "@id": "pkg:apk/alpine/busybox@1.38.0-r1"
         },
         {
-          "@id": "pkg:apk/wolfi/busybox@1.38.0-r0"
+          "@id": "pkg:apk/wolfi/busybox@1.38.0-r1"
         }
       ],
       "status": "fixed",

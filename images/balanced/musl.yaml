@@ -1,12 +1,12 @@
-# Hardened busybox shell on musl. busybox (statically linked, network daemons
-# and suid support removed) and musl are built from source by melange; see
-# melange/busybox.yaml and melange/musl.yaml.
+# Hardened busybox shell on musl. busybox (static, network daemons and suid
+# support removed) is built by melange (melange/busybox.yaml); musl is
+# Alpine's, which carries Alpine's security backports.
 include: flavors/musl.yaml
 
 contents:
   packages:
-    - busybox@local
-    - musl@local
+    - busybox
+    - musl
 
 entrypoint:
   command: /bin/sh

@@ -21,11 +21,11 @@ for image in $IMAGES; do
     lock=$(image_lock "$image" "$flavor")
     echo "[+] Locking $cfg -> $lock"
     apko lock "$cfg" --output "$lock.tmp"
-    # apko silently falls back to the upstream package when `<name>@local` has
-    # no build for an arch; refuse such a lock.
-    if ! wrong=$(misresolved_local_packages "$cfg" "$lock.tmp" "$flavor"); then
+    # apko silently falls back to the distro's package when ours is missing
+    # for an arch; refuse such a lock.
+    if ! wrong=$(misresolved_own_packages "$lock.tmp" "$flavor"); then
       rm -f "$lock.tmp"
-      die "$cfg: @local packages resolved outside packages/$flavor (build them with scripts/packages.sh $flavor <arch>):"$'\n'"$wrong"
+      die "$cfg: our packages resolved outside packages/$flavor (build them with scripts/packages.sh $flavor <arch>):"$'\n'"$wrong"
     fi
     mv "$lock.tmp" "$lock"
   done

@@ -1,0 +1,18 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/xilasec/hardened-images/vex/ada-libs",
+  "author": "xilasec",
+  "timestamp": "2026-11-10T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": { "name": "CVE-2024-9410" },
+      "products": [
+        { "@id": "pkg:apk/alpine/ada-libs@3.3.0-r0" }
+      ],
+      "status": "not_affected",
+      "justification": "component_not_present",
+      "impact_statement": "CVE-2024-9410 is an SSRF in the Ada.cx service's Sentry configuration. ada-libs is the ada-url URL parser; the NVD CPE cpe:2.3:a:ada:ada matches it by name only."
+    }
+  ]
+}

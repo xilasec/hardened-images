@@ -1,6 +1,6 @@
 #!/bin/bash
 # Functional test for base: no shell, so inspect the filesystem from outside.
-# Usage: test.sh <image-ref> (DOCKER and PLATFORM are set by scripts/test.sh)
+# Usage: test.sh <image-ref> (DOCKER, PLATFORM and RUN come from scripts/test.sh)
 set -euo pipefail
 REF=$1
 D=${DOCKER:-docker}

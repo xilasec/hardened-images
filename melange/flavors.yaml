@@ -1,0 +1,9 @@
+# Recipes built per flavor (scripts/packages.sh). Their packages are published
+# to packages/<flavor>/ and win over the distro's through provider-priority,
+# both for direct requests and for dependencies of distro packages.
+musl:
+  - busybox
+  - nghttp2
+  - sqlite
+glibc:
+  - busybox

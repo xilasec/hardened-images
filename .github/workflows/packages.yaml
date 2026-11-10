@@ -35,7 +35,7 @@ jobs:
         run: |
           . scripts/lib.sh
           for f in $FLAVORS; do for a in $(flavor_archs "$f"); do
-            [ -n "$(local_packages_for_flavor "$f")" ] || continue
+            [ -n "$(recipes_for_flavor "$f")" ] || continue
             if [ "$FORCE" = true ] || ! scripts/packages.sh "$f" "$a" --check >&2; then
               jq -nc --arg f "$f" --arg a "$a" '{flavor: $f, arch: $a}'
             fi
@@ -118,7 +118,8 @@ jobs:
         with:
           subject-path: packages/*/*/*.apk
 
-      # GITHUB_TOKEN pushes do not trigger workflows.
+      # GITHUB_TOKEN pushes do not trigger workflows. Our packages can reach
+      # any image through dependencies, so gate them all.
       - if: steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}

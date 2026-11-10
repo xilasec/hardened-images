@@ -21,7 +21,7 @@ on:
         options: [diff, scan, all]
         default: diff
       image:
-        description: "Image (directory under images/) or all"
+        description: "Images (comma separated directories under images/) or all"
         type: string
         default: all
 
@@ -40,6 +40,7 @@ jobs:
       packages: read
     outputs:
       publish: ${{ steps.ci.outputs.publish }}
+      alerts: ${{ steps.ci.outputs.alerts }}
     env:
       REGISTRY: ghcr.io/${{ github.repository_owner }}
     steps:
@@ -64,6 +65,7 @@ jobs:
           rc=0
           scripts/ci.sh "$MODE" "$IMAGE" || rc=$?
           echo "publish=$(cat dist/publish.json 2>/dev/null || echo '[]')" >> "$GITHUB_OUTPUT"
+          echo "alerts=$(wc -l < dist/alerts.txt 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
           exit $rc
 
       # Images that passed are published even if another one failed.
@@ -75,6 +77,7 @@ jobs:
           path: |
             dist/*.digest
             dist/sbom-*.json
+            dist/grype-*.json
             images/*/*.lock.json
           retention-days: 7
 
@@ -124,3 +127,42 @@ jobs:
 
       - name: Move ${{ matrix.flavor }} tag
         run: scripts/publish.sh promote ${{ matrix.image }} ${{ matrix.flavor }} "${{ steps.push.outputs.digest }}"
+
+  # Automated upstream bumps (update.yaml): merge the bot PR once every gate
+  # passed, then republish what changed.
+  merge:
+    needs: check
+    if: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'bot/') && needs.check.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # GITHUB_TOKEN merges do not trigger workflows. diff mode publishes only
+      # images whose digests changed.
+      - run: |
+          gh pr merge "$GITHUB_REF_NAME" --squash --delete-branch
+          gh workflow run build.yaml --ref main -f mode=diff
+
+  # Scheduled runs only: open (or comment on) one issue when the daily run
+  # fails or a published image has a blocking finding without a fix.
+  notify:
+    needs: [check, publish]
+    if: ${{ always() && github.event_name == 'schedule' && (needs.check.result == 'failure' || needs.publish.result == 'failure' || needs.check.outputs.alerts != '0') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - run: |
+          title="Daily image build needs attention"
+          body="Run: $RUN (check: ${{ needs.check.result }}, publish: ${{ needs.publish.result }}, unfixable blocking findings: ${{ needs.check.outputs.alerts }})"
+          n=$(gh issue list --state open --search "in:title \"$title\"" --json number -q '.[0].number')
+          if [ -n "$n" ]; then gh issue comment "$n" --body "$body"; else gh issue create --title "$title" --body "$body"; fi

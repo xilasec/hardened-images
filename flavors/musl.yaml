@@ -18,9 +18,9 @@ contents:
   repositories:
     - https://dl-cdn.alpinelinux.org/alpine/v3.23/main
     - https://dl-cdn.alpinelinux.org/alpine/v3.23/community
-    # Packages built from melange/ are only installed when requested as
-    # `<name>@local`; untagged names always resolve from Alpine.
-    - '@local ./packages/musl'
+    # Our melange packages (melange/flavors.yaml). They carry a higher
+    # provider-priority, so they replace the distro's wherever they apply.
+    - ./packages/musl
   packages:
     # /etc/os-release lets syft/grype/trivy identify the distro and match
     # against Alpine's secdb (with backported fixes) instead of raw NVD ranges.

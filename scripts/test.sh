@@ -14,7 +14,9 @@ ARCH=${3:-host}
 STEM=$(stem "$IMAGE" "$FLAVOR" "$ARCH")
 export DOCKER=${DOCKER:-docker}
 PLATFORM="linux/$(oci_arch "$ARCH")"
-export PLATFORM
+# Every test runs the way a hardened deployment would.
+RUN="run --rm --platform $PLATFORM --read-only --cap-drop=ALL --security-opt=no-new-privileges"
+export PLATFORM RUN
 
 # Use the reference docker reports: apko tags single-arch archives with an
 # -<arch> suffix (e.g. node24:musl-amd64).
