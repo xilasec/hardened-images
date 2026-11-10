@@ -1,20 +1,16 @@
 #!/bin/bash
-# Build the melange packages a flavor's images request as `<name>@local`.
+# Build the melange recipes listed for a flavor in melange/flavors.yaml.
+# Recipes build against the distro only.
 #
 # Usage: scripts/packages.sh <flavor> [arch] [--check]
 #
-# Packages are immutable, committed artifacts under packages/<flavor>/<arch>/,
-# pinned by checksum in the image lockfiles. Each one carries a stamp file
-# (<name>.inputs) recording the version and a hash of everything that
-# determines its contents: the recipe, its source dir (patches) and the
-# flavor's upstream repositories. A package is rebuilt only when that stamp is
-# missing or stale, and a rebuild with an unchanged version is refused: bump
-# package.epoch so the new bytes get a new version.
+# Output is committed under packages/<flavor>/<arch>/. A stamp per recipe
+# (<recipe>.inputs) holds its version and a hash of the recipe (normalized),
+# its source dir and the flavor repositories. Only stale recipes are rebuilt; changing inputs
+# without a new version fails: bump package.epoch.
 #
-# --check only reports stale packages (exit 1), without building.
-#
-# Signing key: $MELANGE_SIGNING_KEY (path), default
-# melange/xilasec@hardned-images.rsa (gitignored).
+# --check only reports stale recipes (exit 1).
+# Signing key: $MELANGE_SIGNING_KEY, default melange/xilasec@hardned-images.rsa.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib.sh
@@ -29,67 +25,60 @@ REPO_DIR="packages/$FLAVOR"
 OUT="$REPO_DIR/$ARCH"
 KEY=${MELANGE_SIGNING_KEY:-melange/xilasec@hardned-images.rsa}
 
+version_of() { echo "$(yq -r .package.version "melange/$1.yaml")-r$(yq -r .package.epoch "melange/$1.yaml")"; }
+
+# Comments, formatting and the update: block do not change what is built.
 inputs_of() {
-  local pkg=$1
   {
-    sha256sum "melange/$pkg.yaml"
-    [ -d "melange/$pkg" ] && find "melange/$pkg" -type f -print0 | sort -z | xargs -0 sha256sum
+    yq -o json 'del(.update)' "melange/$1.yaml" | sha256sum
+    [ -d "melange/$1" ] && find "melange/$1" -type f -print0 | sort -z | xargs -0 sha256sum
     flavor_repositories "$FLAVOR"
   } | sha256sum | cut -d' ' -f1
 }
 
+recipes=$(recipes_for_flavor "$FLAVOR")
 stale=()
-for pkg in $(local_packages_for_flavor "$FLAVOR"); do
-  recipe="melange/$pkg.yaml"
-  [ -f "$recipe" ] || die "images request $pkg@local but $recipe does not exist"
-  ver="$(yq -r .package.version "$recipe")-r$(yq -r .package.epoch "$recipe")"
-  want="$ver $(inputs_of "$pkg")"
-  have=$(cat "$OUT/$pkg.inputs" 2>/dev/null || true)
-  if [ "$want" = "$have" ] && [ -f "$OUT/$pkg-$ver.apk" ]; then
-    echo "[=] $FLAVOR/$ARCH $pkg-$ver up to date"
+for r in $recipes; do
+  ver=$(version_of "$r")
+  wanted="$ver $(inputs_of "$r")"
+  have=$(cat "$OUT/$r.inputs" 2>/dev/null || true)
+  if [ "$wanted" = "$have" ] && [ -f "$OUT/$r-$ver.apk" ]; then
+    echo "[=] $FLAVOR/$ARCH $r-$ver up to date"
     continue
   fi
   if [ -n "$have" ] && [ "${have%% *}" = "$ver" ]; then
-    die "$pkg inputs changed but version is still $ver: bump package.epoch in $recipe"
+    die "$r inputs changed but version is still $ver: bump package.epoch in melange/$r.yaml"
   fi
-  stale+=("$pkg")
+  stale+=("$r")
 done
 
-if [ ${#stale[@]} -eq 0 ]; then exit 0; fi
-if $CHECK; then
-  die "stale packages for $FLAVOR/$ARCH: ${stale[*]} (run scripts/packages.sh $FLAVOR $ARCH)"
-fi
-
+[ ${#stale[@]} -eq 0 ] && exit 0
+$CHECK && die "stale recipes for $FLAVOR/$ARCH: ${stale[*]} (run scripts/packages.sh $FLAVOR $ARCH)"
 [ -f "$KEY" ] || die "signing key not found at $KEY (set MELANGE_SIGNING_KEY)"
 
 repo_args=()
-for r in $(flavor_repositories "$FLAVOR"); do repo_args+=(--repository-append "$r"); done
-for k in $(flavor_keyrings "$FLAVOR"); do repo_args+=(--keyring-append "$k"); done
+for x in $(flavor_repositories "$FLAVOR"); do repo_args+=(--repository-append "$x"); done
+for x in $(flavor_keyrings "$FLAVOR"); do repo_args+=(--keyring-append "$x"); done
 
 mkdir -p "$OUT"
-for pkg in "${stale[@]}"; do
-  recipe="melange/$pkg.yaml"
-  ver="$(yq -r .package.version "$recipe")-r$(yq -r .package.epoch "$recipe")"
-  # Deterministic timestamps: the last commit touching the recipe (or 0 for an
-  # uncommitted recipe). Same inputs -> byte-identical .apk.
-  SOURCE_DATE_EPOCH=$(git log -1 --format=%ct -- "$recipe" "melange/$pkg" 2>/dev/null || true)
+for r in "${stale[@]}"; do
+  ver=$(version_of "$r")
+  # Deterministic timestamps: last commit touching the recipe (0 if uncommitted).
+  SOURCE_DATE_EPOCH=$(git log -1 --format=%ct -- "melange/$r.yaml" "melange/$r" 2>/dev/null || true)
   export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-0}
 
   src_args=()
-  [ -d "melange/$pkg" ] && src_args=(--source-dir "melange/$pkg")
+  [ -d "melange/$r" ] && src_args=(--source-dir "melange/$r")
 
-  echo "[+] melange: $FLAVOR/$ARCH $pkg-$ver (SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH)"
-  rm -f "$OUT/$pkg"-[0-9]*.apk
-  melange build "$recipe" \
+  echo "[+] melange: $FLAVOR/$ARCH $r-$ver"
+  for p in $(recipe_provides "melange/$r.yaml"); do rm -f "$OUT/$p"-[0-9]*.apk; done
+  melange build "melange/$r.yaml" \
     --arch "$ARCH" \
     --namespace xilasec \
     --signing-key "$KEY" \
     --generate-index=false \
-    "${src_args[@]}" \
-    "${repo_args[@]}" \
+    "${src_args[@]}" "${repo_args[@]}" \
     --out-dir "$REPO_DIR"
-  echo "$ver $(inputs_of "$pkg")" > "$OUT/$pkg.inputs"
+  echo "$ver $(inputs_of "$r")" > "$OUT/$r.inputs"
+  melange index --signing-key "$KEY" --output "$OUT/APKINDEX.tar.gz" "$OUT"/*.apk
 done
-
-echo "[+] Indexing $OUT"
-melange index --signing-key "$KEY" --output "$OUT/APKINDEX.tar.gz" "$OUT"/*.apk

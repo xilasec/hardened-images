@@ -1,5 +1,5 @@
 #!/bin/bash
-# OCI conformance + CIS checks (dockle).
+# OCI conformance, ELF hardening (scripts/harden.sh) and CIS checks (dockle).
 # Usage: scripts/compliance.sh <image> <flavor> [arch]
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -19,6 +19,8 @@ oci=$(tar -xOf "$TAR" "$m" | jq -r '
     (.annotations["org.opencontainers.image.created"] // "" | length > 0) ] | all')
 [ "$oci" = true ] || die "$STEM is not an OCI image with standard annotations"
 echo "[+] OCI media types and annotations OK"
+
+scripts/harden.sh "$@"
 
 REPORT="$OUTDIR/dockle-$STEM.json"
 echo "[+] dockle $STEM"

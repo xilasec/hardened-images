@@ -1,0 +1,49 @@
+name: Update packages
+
+# Daily: bump melange recipes to their latest upstream release
+# (scripts/update.sh). A bump opens a bot/update-* PR and starts the package
+# build; build.yaml merges the PR once every gate passes and republishes the
+# affected images. A day without upstream releases costs one short job.
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - run: scripts/install-tools.sh melange
+
+      - name: Bump and open PR
+        run: |
+          bumps=$(scripts/update.sh)
+          [ -n "$bumps" ] || { echo "Everything is current"; exit 0; }
+          echo "$bumps"
+          title="packages: $(awk '{printf "%s%s %s", (NR > 1 ? ", " : ""), $1, $3}' <<<"$bumps")"
+          branch="bot/update-$(date -u +%F)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git commit -qam "$title"
+          git push -f origin "$branch"
+          gh pr create --head "$branch" --title "$title" \
+            --body "Automated upstream bump. Merged automatically when all gates pass." || true
+          # GITHUB_TOKEN pushes do not trigger workflows.
+          gh workflow run packages.yaml --ref "$branch"

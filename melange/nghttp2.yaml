@@ -1,0 +1,56 @@
+package:
+  name: nghttp2
+  version: 1.71.0
+  epoch: 0
+  description: HTTP/2 C library (library only)
+  copyright:
+    - license: MIT
+  checks:
+    disabled:
+      - usrmerge
+
+environment:
+  contents:
+    packages:
+      - busybox
+      - build-base
+      - linux-headers
+      - ca-certificates-bundle
+      - pkgconf
+
+pipeline:
+  - uses: fetch
+    with:
+      uri: https://github.com/nghttp2/nghttp2/releases/download/v${{package.version}}/nghttp2-${{package.version}}.tar.xz
+      expected-sha256: c0f55121d88650e4b9227aec28cebaf664d2417ca60fe70be0f8d38829f52116
+  - runs: |
+      ./configure --prefix=/usr --enable-lib-only --disable-static
+      make -j"$(nproc)"
+      make DESTDIR="${{targets.destdir}}" install
+      rm -rf "${{targets.destdir}}"/usr/share
+  - uses: strip
+
+subpackages:
+  # Same name as Alpine's package, so nodejs links against it unchanged.
+  - name: nghttp2-libs
+    description: nghttp2 shared library
+    # Wins over the distro's nghttp2-libs wherever a package needs so:libnghttp2.so.14.
+    dependencies:
+      provider-priority: 100
+    pipeline:
+      - runs: |
+          mkdir -p "${{targets.subpkgdir}}"/usr/lib
+          mv "${{targets.destdir}}"/usr/lib/libnghttp2.so.* "${{targets.subpkgdir}}"/usr/lib/
+  - name: nghttp2-dev
+    description: nghttp2 headers
+    dependencies:
+      runtime:
+        - nghttp2-libs
+    pipeline:
+      - uses: split/dev
+
+update:
+  enabled: true
+  github:
+    identifier: nghttp2/nghttp2
+    strip-prefix: v

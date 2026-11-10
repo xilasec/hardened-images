@@ -8,7 +8,7 @@
 # push: rebuild from the tested lockfile, refuse unless every per-arch digest
 # equals the tested one, push under the immutable tag <flavor>-YYYY-MM-DD
 # (<flavor>-YYYY-MM-DD-HHMM if that day already has one), then sign and attest
-# SBOMs, VEX and the lockfile.
+# SBOMs, VEX (scripts/vex.sh) and the lockfile.
 # promote: move <flavor> to the digest. Runs last, so it never points at an
 # unsigned image.
 #
@@ -43,7 +43,7 @@ case "$CMD" in
     tested=$(sort <<<"$tested" | grep .)
 
     TAG="$FLAVOR-$(date -u +%F)"
-    if skopeo inspect --tls-verify="$TLS_VERIFY" --raw "docker://$REPO:$TAG" >/dev/null 2>&1; then
+    if skopeo --command-timeout 60s inspect --tls-verify="$TLS_VERIFY" --raw "docker://$REPO:$TAG" >/dev/null 2>&1; then
       TAG="$TAG-$(date -u +%H%M)"
     fi
 
@@ -61,6 +61,7 @@ case "$CMD" in
     [ "${ref##*@}" = "$DIGEST" ] || die "apko publish pushed '$ref', expected $DIGEST"
     [ "$(index_manifests "$REPO@$DIGEST")" = "$tested" ] || die "registry serves different manifests"
 
+    scripts/vex.sh "$IMAGE" "$FLAVOR" "$REPO" "$DIGEST"
     if [ "$SIGN" = true ]; then
       cosign sign --yes --recursive "$REPO@$DIGEST"
       for arch in $(flavor_archs "$FLAVOR"); do
@@ -68,9 +69,10 @@ case "$CMD" in
         cosign attest --yes --type spdxjson --predicate "$OUTDIR/sbom-$s.spdx.json" \
           "$REPO@$(cat "$OUTDIR/$s.digest")"
       done
-      for v in $(vex_files_of "$CFG"); do
-        cosign attest --yes --type openvex --predicate "$v" "$REPO@$DIGEST"
-      done
+      # Legacy attestation format: trivy --vex oci discovers it, the new
+      # bundle format it does not.
+      cosign attest --yes --new-bundle-format=false --type openvex \
+        --predicate "$OUTDIR/vex-$IMAGE-$FLAVOR.openvex.json" "$REPO@$DIGEST"
       cosign attest --yes --type https://apko.dev/lockfile/v1 --predicate "$LOCK" "$REPO@$DIGEST"
     fi
 
@@ -81,10 +83,10 @@ case "$CMD" in
 
   promote)
     DIGEST=${4:?usage: publish.sh promote <image> <flavor> <index-digest>}
-    skopeo copy -q --all --preserve-digests \
+    skopeo --command-timeout 300s copy -q --all --preserve-digests \
       --src-tls-verify="$TLS_VERIFY" --dest-tls-verify="$TLS_VERIFY" \
       "docker://$REPO@$DIGEST" "docker://$REPO:$FLAVOR"
-    got="sha256:$(skopeo inspect --tls-verify="$TLS_VERIFY" --raw "docker://$REPO:$FLAVOR" | sha256sum | cut -d' ' -f1)"
+    got="sha256:$(skopeo --command-timeout 60s inspect --tls-verify="$TLS_VERIFY" --raw "docker://$REPO:$FLAVOR" | sha256sum | cut -d' ' -f1)"
     [ "$got" = "$DIGEST" ] || die "$REPO:$FLAVOR resolves to $got, expected $DIGEST"
     echo "[+] $REPO:$FLAVOR -> $DIGEST"
     ;;

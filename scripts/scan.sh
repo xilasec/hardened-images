@@ -1,14 +1,15 @@
 #!/bin/bash
-# Scan a built archive with two independent scanners.
+# Scan a built archive.
 #
 # Usage: scripts/scan.sh <image> <flavor> [arch]
 #
-#   grype  reads the syft SBOM (same inventory that gets attested)
-#   trivy  reads the image archive with its own cataloger, so a package syft
-#          misses is still seen by one scanner
+#   grype  on the syft SBOM (the inventory that gets attested)
+#   trivy  on the archive, with its own cataloger
+#   grype  again with the other distro's advisories, for packages we build
+#          ourselves: their versions are newer than the distro's, so the
+#          distro's own advisories never match them
 #
-# Both apply the OpenVEX documents for the locally built packages this image
-# installs (vex/<package>.openvex.json). Gating happens in scripts/verify.sh.
+# All apply vex/. Gating happens in scripts/verify.sh.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib.sh
@@ -20,11 +21,13 @@ TAR="$OUTDIR/$STEM.tar"
 SBOM="$OUTDIR/sbom-$STEM.spdx.json"
 GRYPE="$OUTDIR/grype-$STEM.json"
 TRIVY="$OUTDIR/trivy-$STEM.json"
+XDISTRO="$OUTDIR/grype-xdistro-$STEM.json"
 [ -f "$SBOM" ] || die "missing $SBOM (run scripts/sbom.sh first)"
+rm -f "$XDISTRO"
 
 export TRIVY_DISABLE_VEX_NOTICE=1
 vex_args=()
-for v in $(vex_files_of "$(image_config "$IMAGE" "$FLAVOR")"); do
+for v in $(vex_files); do
   echo "[+] Applying VEX $v"
   vex_args+=(--vex "$v")
 done
@@ -35,6 +38,18 @@ grype "$SBOM" -q "${vex_args[@]}" -o table -o "json=$GRYPE"
 echo "[+] trivy ($TAR)"
 trivy image -q --input "$TAR" "${vex_args[@]}" --format json --output "$TRIVY"
 trivy convert -q --format table "$TRIVY"
+
+own=$(for r in $(recipes_for_flavor "$FLAVOR"); do recipe_provides "melange/$r.yaml"; done | jq -R . | jq -sc .)
+if [ "$own" != "[]" ]; then
+  case "$FLAVOR" in
+    musl) other=wolfi:rolling ;;
+    glibc) other="alpine:$(flavor_repositories musl | grep -oE 'v[0-9]+\.[0-9]+' | head -n1 | tr -d v)" ;;
+  esac
+  echo "[+] grype with $other advisories for our own packages"
+  grype "$SBOM" -q --distro "$other" "${vex_args[@]}" -o json \
+    | jq --argjson own "$own" '.matches |= map(select(.artifact.name | IN($own[])))' > "$XDISTRO"
+  jq -r '.matches[] | "    \(.vulnerability.id) \(.vulnerability.severity) \(.artifact.name)@\(.artifact.version)"' "$XDISTRO"
+fi
 
 # Cross-check: which High/Critical findings each scanner reports.
 g=$(jq -r '.matches[] | select(.vulnerability.severity|test("High|Critical")) | .vulnerability.id' "$GRYPE" | sort -u)

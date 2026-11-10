@@ -1,0 +1,67 @@
+package:
+  name: sqlite
+  version: 3.54.1
+  epoch: 0
+  description: SQLite library (libs and headers only)
+  copyright:
+    - license: blessing
+  checks:
+    disabled:
+      - usrmerge
+
+environment:
+  contents:
+    packages:
+      - busybox
+      - build-base
+      - linux-headers
+      - ca-certificates-bundle
+
+var-transforms:
+  # 3.54.1 -> 3540100 (sqlite.org tarball naming)
+  - from: ${{package.version}}
+    match: ^(\d+)\.(\d+)\.(\d+)$
+    replace: "${1}${2}0${3}00"
+    to: tarball-version
+
+pipeline:
+  # SHA3-256 b6ced585... as published on sqlite.org/download.html
+  - uses: fetch
+    with:
+      uri: https://www.sqlite.org/2026/sqlite-autoconf-${{vars.tarball-version}}.tar.gz
+      expected-sha256: 926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e
+  # Same feature flags as Alpine's sqlite, so it is a drop-in libsqlite3.so.0.
+  - runs: |
+      export CFLAGS="-O2 -DSQLITE_ENABLE_FTS3_PARENTHESIS -DSQLITE_ENABLE_COLUMN_METADATA \
+        -DSQLITE_SECURE_DELETE -DSQLITE_ENABLE_UNLOCK_NOTIFY -DSQLITE_ENABLE_RTREE \
+        -DSQLITE_ENABLE_GEOPOLY -DSQLITE_USE_URI -DSQLITE_ENABLE_DBSTAT_VTAB \
+        -DSQLITE_SOUNDEX -DSQLITE_MAX_VARIABLE_NUMBER=250000"
+      ./configure --prefix=/usr --enable-threadsafe --enable-session \
+        --enable-fts3 --enable-fts4 --enable-fts5 --disable-static \
+        --disable-readline --soname=legacy
+      make -j"$(nproc)"
+      make DESTDIR="${{targets.destdir}}" install
+  - uses: strip
+
+subpackages:
+  - name: sqlite-libs
+    description: SQLite shared library
+    # Wins over the distro's sqlite-libs wherever a package needs so:libsqlite3.so.0.
+    dependencies:
+      provider-priority: 100
+    pipeline:
+      - runs: |
+          mkdir -p "${{targets.subpkgdir}}"/usr/lib
+          mv "${{targets.destdir}}"/usr/lib/libsqlite3.so.* "${{targets.subpkgdir}}"/usr/lib/
+  - name: sqlite-dev
+    description: SQLite headers
+    dependencies:
+      runtime:
+        - sqlite-libs
+    pipeline:
+      - uses: split/dev
+
+update:
+  enabled: true
+  release-monitor:
+    identifier: 4877

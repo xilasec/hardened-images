@@ -60,46 +60,39 @@ image_lock() { echo "images/$1/$2.lock.json"; }
 # Stable artifact stem for one image/flavor/arch, e.g. node24-musl-x86_64.
 stem() { echo "$1-$2-$(apk_arch "$3")"; }
 
-# Names requested as `<name>@local` by one image config.
-local_packages_of() {
-  { grep -oE '^[[:space:]]*-[[:space:]]*[A-Za-z0-9._+-]+@local' "$1" || true; } \
-    | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/@local$//' | sort -u
+# Recipes built for a flavor (melange/flavors.yaml).
+recipes_for_flavor() { yq -r ".$1[]?" melange/flavors.yaml; }
+
+# Package names our recipes produce for a flavor.
+own_packages() {
+  local r
+  for r in $(recipes_for_flavor "$1"); do recipe_provides "melange/$r.yaml"; done | sort -u
 }
 
-# Names requested as `<name>@local` by any image of one flavor.
-local_packages_for_flavor() {
-  local f
-  for f in images/*/"$1".yaml; do local_packages_of "$f"; done | sort -u
-}
-
-# Lock entries for `<name>@local` packages that did not resolve to
-# packages/<flavor>/ (apko falls back to upstream when an arch has no local
-# build). Prints "<name> <arch>: <url>" lines and returns 1 when any exist.
-misresolved_local_packages() {
-  local cfg=$1 lock=$2 flavor=$3 out
-  out=$(local_packages_of "$cfg" | jq -R . | jq -rs --arg dir "./packages/$flavor/" --slurpfile lock "$lock" '
+# Lock entries for our packages that did not resolve to packages/<flavor>/
+# (missing build for an arch, or the distro won). Prints "<name> <arch>:
+# <url>" lines and returns 1 when any exist.
+misresolved_own_packages() {
+  local lock=$1 flavor=$2 out
+  out=$(own_packages "$flavor" | jq -R . | jq -rs --arg dir "./packages/$flavor/" --slurpfile lock "$lock" '
     . as $names | $lock[0].contents.packages[]
     | select((.name | IN($names[])) and (.url | startswith($dir) | not))
     | "\(.name) \(.architecture): \(.url)"')
   [ -z "$out" ] || { echo "$out"; return 1; }
 }
 
-# Upstream repositories / keyrings of a flavor (the @local repo is excluded:
+# Package names a melange recipe produces (main package + subpackages).
+recipe_provides() { yq -r '[.package.name] + [.subpackages[]?.name] | .[]' "$1"; }
+
+# Upstream repositories / keyrings of a flavor (our local repo is excluded:
 # melange build environments only need the distro).
-flavor_repositories() { yq -r '.contents.repositories[] | select(test("^@") | not)' "flavors/$1.yaml"; }
+flavor_repositories() { yq -r '.contents.repositories[] | select(test("^(@|\\./)") | not)' "flavors/$1.yaml"; }
 flavor_keyrings() { yq -r '.contents.keyring[]' "flavors/$1.yaml"; }
 flavor_archs() { yq -r '.archs[]' "flavors/$1.yaml"; }
 
-# OpenVEX documents that apply to an image: one per locally built package it
-# installs (vex/<package>.openvex.json). Statements are scoped to the exact
-# package URL + version, so they cannot suppress findings in upstream builds.
-vex_files_of() {
-  local p
-  for p in $(local_packages_of "$1"); do
-    [ -f "vex/$p.openvex.json" ] && echo "vex/$p.openvex.json"
-  done
-  return 0
-}
+# Hand-written OpenVEX documents (vex/*.openvex.json). Statements name exact
+# package URLs and versions, so applying all of them to every image is safe.
+vex_files() { ls vex/*.openvex.json 2>/dev/null || true; }
 
 # Digest of the single manifest inside an apko single-arch archive.
 archive_manifest_digest() {
@@ -111,7 +104,7 @@ TLS_VERIFY=${TLS_VERIFY:-true}
 # "<oci-arch> <digest>" per manifest of a registry index, sorted. Fails when
 # the reference does not exist.
 index_manifests() {
-  skopeo inspect --tls-verify="$TLS_VERIFY" --raw "docker://$1" \
+  skopeo --command-timeout 60s inspect --tls-verify="$TLS_VERIFY" --raw "docker://$1" \
     | jq -r '.manifests[] | "\(.platform.architecture) \(.digest)"' | sort
 }
 

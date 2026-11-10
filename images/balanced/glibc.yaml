@@ -5,7 +5,7 @@ include: flavors/glibc.yaml
 
 contents:
   packages:
-    - busybox@local
+    - busybox
     - glibc
 
 entrypoint:

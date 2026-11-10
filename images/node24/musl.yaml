@@ -1,7 +1,6 @@
-# Node.js 24 (LTS) runtime on musl, straight from Alpine's signed index. node
-# lands at /usr/bin/node, same path as the glibc flavor. No npm: it is a
-# build-time tool and its bundled dependencies carry their own CVE stream;
-# install dependencies in a build stage and copy node_modules in.
+# Node.js 24 (LTS) runtime on musl. node is Alpine's signed build; the sqlite,
+# nghttp2 and busybox it pulls in are our newer builds (melange/flavors.yaml).
+# No npm: install dependencies in a build stage and copy node_modules in.
 include: flavors/musl.yaml
 
 contents:

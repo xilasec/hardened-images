@@ -1,5 +1,5 @@
 #!/bin/bash
-# Policy gate (policies/vulnerability.rego) over both scanner reports.
+# Policy gate (policies/vulnerability.rego) over every scanner report.
 # Usage: scripts/verify.sh <image> <flavor> [arch]
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -7,7 +7,9 @@ cd "$(dirname "$0")/.."
 
 STEM=$(stem "${1:?usage: verify.sh <image> <flavor> [arch]}" "${2:?}" "${3:-host}")
 rc=0
-for report in "$OUTDIR/grype-$STEM.json" "$OUTDIR/trivy-$STEM.json"; do
+reports=("$OUTDIR/grype-$STEM.json" "$OUTDIR/trivy-$STEM.json")
+[ -f "$OUTDIR/grype-xdistro-$STEM.json" ] && reports+=("$OUTDIR/grype-xdistro-$STEM.json")
+for report in "${reports[@]}"; do
   [ -f "$report" ] || die "missing $report (run scripts/scan.sh first)"
   result=$(opa eval --input "$report" --data policies --format json 'data.policies.vuln')
   allow=$(jq -r '.result[0].expressions[0].value.allow' <<<"$result")

@@ -1,10 +1,11 @@
 #!/bin/bash
+# shellcheck disable=SC2086 # $RUN holds several docker flags
 # Functional test for balanced: hardened busybox shell.
-# Usage: test.sh <image-ref> (DOCKER and PLATFORM are set by scripts/test.sh)
+# Usage: test.sh <image-ref> (DOCKER, PLATFORM and RUN come from scripts/test.sh)
 set -euo pipefail
 REF=$1
 D=${DOCKER:-docker}
-run() { $D run --rm --platform "$PLATFORM" "$REF" -c "$1"; }
+run() { $D $RUN "$REF" -c "$1"; }
 
 [ "$(run 'echo ok')" = ok ] || { echo "[-] /bin/sh does not run"; exit 1; }
 [ "$(run 'id -u')" = 1000 ] || { echo "[-] shell is not running as uid 1000"; exit 1; }

@@ -1,7 +1,7 @@
 #!/bin/bash
 # CI driver: decide what needs building, build and gate only that.
 #
-# Usage: scripts/ci.sh <mode> [image|all]
+# Usage: scripts/ci.sh <mode> [image[,image...]|all]
 #   scan  rescan published images; rebuild only those with fixable findings
 #   diff  rebuild every image; keep only those whose digests changed
 #   all   rebuild and gate everything (pull requests)
@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib.sh
 
-MODE=${1:?usage: ci.sh scan|diff|all [image]}
+MODE=${1:?usage: ci.sh scan|diff|all [images]}
 SEL=${2:-all}
 case "$MODE" in scan|diff|all) ;; *) die "unknown mode $MODE" ;; esac
 
@@ -21,17 +21,30 @@ check_parity
 for f in $FLAVORS; do for a in $(flavor_archs "$f"); do scripts/packages.sh "$f" "$a" --check; done; done
 
 images=$(all_images)
-[ "$SEL" = all ] || { grep -qx "$SEL" <<<"$images" || die "unknown image $SEL"; images=$SEL; }
+if [ "$SEL" != all ]; then
+  for i in ${SEL//,/ }; do grep -qx "$i" <<<"$images" || die "unknown image $i"; done
+  images=${SEL//,/ }
+fi
 mkdir -p "$OUTDIR"
+: > "$OUTDIR/alerts.txt"
 
 # Fixable findings in a published image, summed over its architectures.
+# Blocking findings without a fix (new KEV entry, rescored CVE) cannot be
+# solved by a rebuild; they are recorded in $OUTDIR/alerts.txt.
 fixable_published() {
-  local image=$1 flavor=$2 arch n total=0 vex=()
-  for v in $(vex_files_of "images/$image/$flavor.yaml"); do vex+=(--vex "$v"); done
+  local image=$1 flavor=$2 arch n total=0 vex=() report
+  for v in $(vex_files); do vex+=(--vex "$v"); done
   for arch in $(flavor_archs "$flavor"); do
-    n=$(grype "registry:$REGISTRY/$image:$flavor" --platform "linux/$(oci_arch "$arch")" \
-          -q "${vex[@]}" -o json | jq '[.matches[] | select(.vulnerability.fix.state == "fixed")] | length')
+    report=$(mktemp)
+    grype "registry:$REGISTRY/$image:$flavor" --platform "linux/$(oci_arch "$arch")" \
+      -q "${vex[@]}" -o json > "$report"
+    n=$(jq '[.matches[] | select(.vulnerability.fix.state == "fixed")] | length' "$report")
     total=$((total + n))
+    if [ "$n" -eq 0 ]; then
+      opa eval --input "$report" --data policies --format raw 'data.policies.vuln.violation[_]' \
+        | sed "s|^|$image:$flavor $arch: |" >> "$OUTDIR/alerts.txt" || true
+    fi
+    rm -f "$report"
   done
   echo "$total"
 }
@@ -62,7 +75,7 @@ for image in $images; do
     published=$(index_manifests "$REGISTRY/$id" 2>/dev/null || true)
 
     if [ "$MODE" = scan ] && [ -n "$published" ]; then
-      need grype
+      need grype opa
       n=$(fixable_published "$image" "$flavor")
       if [ "$n" -eq 0 ]; then echo "[=] $id: no fixable findings, skip"; continue; fi
       echo "[+] $id: $n fixable findings, rebuilding"
@@ -94,4 +107,7 @@ done
 printf '%s\n' "${publish[@]}" | jq -Rnc '[inputs | select(length > 0) | split(" ") | {image: .[0], flavor: .[1]}]' \
   > "$OUTDIR/publish.json"
 echo "[+] to publish: $(cat "$OUTDIR/publish.json")"
+if [ -s "$OUTDIR/alerts.txt" ]; then
+  echo "[!] blocking findings without a fix:"; sed 's/^/    /' "$OUTDIR/alerts.txt"
+fi
 [ ${#failed[@]} -eq 0 ] || die "failed: ${failed[*]}"
