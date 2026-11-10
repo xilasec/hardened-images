@@ -71,7 +71,7 @@ case "$CMD" in
       done
       # Legacy attestation format: trivy --vex oci discovers it, the new
       # bundle format it does not.
-      cosign attest --yes --new-bundle-format=false --type openvex \
+      cosign attest --yes --new-bundle-format=false --use-signing-config=false --type openvex \
         --predicate "$OUTDIR/vex-$IMAGE-$FLAVOR.openvex.json" "$REPO@$DIGEST"
       cosign attest --yes --type https://apko.dev/lockfile/v1 --predicate "$LOCK" "$REPO@$DIGEST"
     fi
