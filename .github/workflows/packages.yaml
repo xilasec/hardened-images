@@ -106,7 +106,7 @@ jobs:
       - name: Re-lock images
         run: |
           scripts/install-tools.sh apko
-          scripts/lock.sh all all
+          scripts/lock.sh all all --local-only
 
       - name: Commit
         id: commit
