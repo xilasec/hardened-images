@@ -36,7 +36,7 @@ jobs:
           . scripts/lib.sh
           for f in $FLAVORS; do for a in $(flavor_archs "$f"); do
             [ -n "$(local_packages_for_flavor "$f")" ] || continue
-            if [ "$FORCE" = true ] || ! scripts/packages.sh "$f" "$a" --check; then
+            if [ "$FORCE" = true ] || ! scripts/packages.sh "$f" "$a" --check >&2; then
               jq -nc --arg f "$f" --arg a "$a" '{flavor: $f, arch: $a}'
             fi
           done; done | jq -sc . > stale.json
