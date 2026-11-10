@@ -68,9 +68,12 @@ inputs change. Bump `package.epoch` when changing a recipe by hand.
 ```sh
 IMG=ghcr.io/xilasec/node24:musl
 ID=https://github.com/xilasec/hardened-images/.github/workflows/build.yaml@refs/heads/main
-cosign verify "$IMG" --certificate-identity "$ID" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+ISSUER=https://token.actions.githubusercontent.com
+cosign verify "$IMG" --certificate-identity "$ID" --certificate-oidc-issuer "$ISSUER"
 gh attestation verify "oci://$IMG" --repo xilasec/hardened-images
+# VEX uses the legacy attestation format, the one trivy --vex oci discovers
+cosign verify-attestation "$IMG" --type openvex --new-bundle-format=false \
+  --certificate-identity "$ID" --certificate-oidc-issuer "$ISSUER"
 trivy image --vex oci "$IMG"   # applies our published VEX
 ```
 
