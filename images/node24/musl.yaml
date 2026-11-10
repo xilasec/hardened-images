@@ -11,3 +11,7 @@ contents:
 
 entrypoint:
   command: /usr/bin/node
+
+annotations:
+  org.opencontainers.image.title: node24
+  org.opencontainers.image.description: "Node.js 24 runtime on musl, no npm"

@@ -30,3 +30,11 @@ accounts:
 archs:
   - x86_64
   - aarch64
+
+# Standard OCI annotations (also set as config labels). Static on purpose:
+# builds run with --vcs=false so digests do not depend on the checkout.
+annotations:
+  org.opencontainers.image.vendor: xilasec
+  org.opencontainers.image.source: https://github.com/xilasec/hardened-images
+  org.opencontainers.image.url: https://github.com/xilasec/hardened-images
+  org.opencontainers.image.documentation: https://github.com/xilasec/hardened-images#readme

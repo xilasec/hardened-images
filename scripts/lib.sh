@@ -1,7 +1,7 @@
 # Shared helpers for scripts/*.sh. Source, don't execute.
 # shellcheck shell=bash
 
-# Every image ships in both flavors; scripts/matrix.sh enforces it.
+# Every image ships in both flavors; check_parity enforces it.
 #   musl  -> Alpine (flavors/musl.yaml)
 #   glibc -> Wolfi  (flavors/glibc.yaml)
 FLAVORS="musl glibc"
@@ -104,4 +104,38 @@ vex_files_of() {
 # Digest of the single manifest inside an apko single-arch archive.
 archive_manifest_digest() {
   tar -xOf "$1" index.json | jq -r '.manifests[0].digest'
+}
+
+TLS_VERIFY=${TLS_VERIFY:-true}
+
+# "<oci-arch> <digest>" per manifest of a registry index, sorted. Fails when
+# the reference does not exist.
+index_manifests() {
+  skopeo inspect --tls-verify="$TLS_VERIFY" --raw "docker://$1" \
+    | jq -r '.manifests[] | "\(.platform.architecture) \(.digest)"' | sort
+}
+
+# Make sure tools exist. In CI (CI=true) missing ones are installed on
+# demand, so runs that skip everything never download scanners.
+need() {
+  local t missing=()
+  for t in "$@"; do command -v "$t" >/dev/null || missing+=("$t"); done
+  [ ${#missing[@]} -eq 0 ] && return 0
+  [ "${CI:-}" = true ] || die "missing tools: ${missing[*]} (make tools)"
+  scripts/install-tools.sh "${missing[@]}"
+}
+
+# Every image must define every flavor and ship a test.
+check_parity() {
+  local image flavor f errors=()
+  for image in $(all_images); do
+    [ -x "images/$image/test.sh" ] || errors+=("images/$image/test.sh missing or not executable")
+    for flavor in $FLAVORS; do
+      f="images/$image/$flavor.yaml"
+      if [ ! -f "$f" ]; then errors+=("$f missing"); continue; fi
+      [ "$(yq -r '.include // ""' "$f")" = "flavors/$flavor.yaml" ] \
+        || errors+=("$f must 'include: flavors/$flavor.yaml'")
+    done
+  done
+  [ ${#errors[@]} -eq 0 ] || { printf '[-] %s\n' "${errors[@]}" >&2; exit 1; }
 }

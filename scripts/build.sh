@@ -27,7 +27,7 @@ rm -f "$TAR"
 echo "[+] Building $REGISTRY/$IMAGE:$FLAVOR ($ARCH) from $LOCK"
 # --sbom=false: the SBOM of record is produced by syft from this archive
 # (scripts/sbom.sh) and attested at publish time.
-apko build --sbom=false --lockfile "$LOCK" --arch "$ARCH" \
+apko build --sbom=false --vcs=false --lockfile "$LOCK" --arch "$ARCH" \
   ${APKO_CACHE_DIR:+--cache-dir "$APKO_CACHE_DIR"} \
   "$CFG" "$REGISTRY/$IMAGE:$FLAVOR" "$TAR"
 

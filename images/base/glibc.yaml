@@ -5,3 +5,7 @@ contents:
   packages:
     - glibc
     - ca-certificates-bundle
+
+annotations:
+  org.opencontainers.image.title: base
+  org.opencontainers.image.description: "Minimal glibc runtime: libc and CA bundle, no shell"

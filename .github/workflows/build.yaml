@@ -1,28 +1,27 @@
 name: Build Hardened Images
 
-# Every image is built for every flavor (musl = Alpine, glibc = Wolfi) and
-# every arch, on native runners, from its committed lockfile:
-#
-#   plan     parity check + matrix (scripts/matrix.sh), stale-package check
-#   image    build -> reproducibility -> SBOM -> grype+trivy -> policy ->
-#            dockle -> functional test; uploads digest/SBOM/reports only if
-#            every gate passed
-#   publish  (main only) apko publish from the same lock, assert pushed ==
-#            tested digests, cosign sign + SBOM/VEX attestations, SLSA
-#            provenance, then move the <flavor> tag
-#
-# Publishing is a no-op when the registry already serves the tested digests,
-# so re-running this workflow is safe. Images change when locks change; locks
-# are refreshed by update-locks.yaml.
+# Daily: rescan published images, rebuild only those with fixable findings.
+# Push to main: rebuild all, publish only what changed. PR: gate everything.
+# Everything runs in one amd64 job (arm64 tests via qemu); publish jobs start
+# only for images that passed and changed.
 
 on:
-  pull_request:
+  schedule:
+    - cron: "0 4 * * *"
   push:
     branches: [main]
+    paths-ignore: ["**.md"]
+  pull_request:
+    paths-ignore: ["**.md"]
   workflow_dispatch:
     inputs:
+      mode:
+        description: "scan: fixable findings only, diff: changed digests, all: gate everything"
+        type: choice
+        options: [diff, scan, all]
+        default: diff
       image:
-        description: "Image to build (directory under images/), or all"
+        description: "Image (directory under images/) or all"
         type: string
         default: all
 
@@ -34,124 +33,17 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  plan:
-    runs-on: ubuntu-24.04
-    outputs:
-      build: ${{ steps.matrix.outputs.build }}
-      publish: ${{ steps.matrix.outputs.publish }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Flavor parity + matrix
-        id: matrix
-        env:
-          IMAGE: ${{ inputs.image || 'all' }}
-        run: |
-          M=$(scripts/matrix.sh "$IMAGE")
-          echo "$M" | jq .
-          echo "build=$(jq -c .build <<<"$M")" >> "$GITHUB_OUTPUT"
-          echo "publish=$(jq -c .publish <<<"$M")" >> "$GITHUB_OUTPUT"
-
-      - name: Committed melange packages match their recipes
-        run: |
-          for f in musl glibc; do for a in x86_64 aarch64; do
-            scripts/packages.sh "$f" "$a" --check
-          done; done
-
-      - name: Install opa
-        run: scripts/install-tools.sh opa
-
-      - name: Policy unit tests
-        run: opa test policies -v
-
-  image:
-    needs: plan
-    name: ${{ matrix.image }} ${{ matrix.flavor }} ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.plan.outputs.build) }}
-    env:
-      IMAGE: ${{ matrix.image }}
-      FLAVOR: ${{ matrix.flavor }}
-      ARCH: ${{ matrix.arch }}
-      REGISTRY: ghcr.io/${{ github.repository_owner }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install tools
-        run: scripts/install-tools.sh apko syft grype trivy opa dockle
-
-      - name: Build
-        run: scripts/build.sh "$IMAGE" "$FLAVOR" "$ARCH"
-
-      - name: Reproducibility
-        run: scripts/repro.sh "$IMAGE" "$FLAVOR" "$ARCH"
-
-      - name: SBOM
-        run: scripts/sbom.sh "$IMAGE" "$FLAVOR" "$ARCH"
-
-      - name: Scan (grype + trivy)
-        run: scripts/scan.sh "$IMAGE" "$FLAVOR" "$ARCH"
-
-      - name: Policy gate
-        run: scripts/verify.sh "$IMAGE" "$FLAVOR" "$ARCH"
-
-      - name: CIS compliance (dockle)
-        run: scripts/compliance.sh "$IMAGE" "$FLAVOR" "$ARCH"
-
-      - name: Functional test
-        run: scripts/test.sh "$IMAGE" "$FLAVOR" "$ARCH"
-
-      # Uploaded only when every gate above passed; publish treats a missing
-      # digest as "not tested" and refuses to push that image.
-      - name: Upload results
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: result-${{ matrix.image }}-${{ matrix.flavor }}-${{ matrix.arch }}
-          path: |
-            dist/*.digest
-            dist/sbom-*.json
-            dist/grype-*.json
-            dist/trivy-*.json
-            dist/dockle-*.json
-          retention-days: 30
-
-  publish:
-    needs: [plan, image]
-    # Publish whatever passed, even if another image failed.
-    if: >-
-      !cancelled() && needs.plan.result == 'success' &&
-      github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    name: publish ${{ matrix.image }} ${{ matrix.flavor }}
+  check:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
-    concurrency:
-      group: publish-${{ matrix.image }}-${{ matrix.flavor }}
-      cancel-in-progress: false
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.plan.outputs.publish) }}
+      packages: read
+    outputs:
+      publish: ${{ steps.ci.outputs.publish }}
     env:
       REGISTRY: ghcr.io/${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Download tested results
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: result-${{ matrix.image }}-${{ matrix.flavor }}-*
-          path: dist
-          merge-multiple: true
-
-      - name: Install tools
-        run: scripts/install-tools.sh apko cosign
 
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
@@ -159,18 +51,73 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push, verify, sign, attest
+      - name: Policy tests
+        if: github.event_name == 'pull_request'
+        run: scripts/install-tools.sh opa && opa test policies
+
+      - name: Check, build, gate
+        id: ci
+        env:
+          MODE: ${{ github.event_name == 'schedule' && 'scan' || github.event_name == 'pull_request' && 'all' || inputs.mode || 'diff' }}
+          IMAGE: ${{ inputs.image || 'all' }}
+        run: |
+          rc=0
+          scripts/ci.sh "$MODE" "$IMAGE" || rc=$?
+          echo "publish=$(cat dist/publish.json 2>/dev/null || echo '[]')" >> "$GITHUB_OUTPUT"
+          exit $rc
+
+      # Images that passed are published even if another one failed.
+      - name: Upload tested results
+        if: ${{ !cancelled() && steps.ci.outputs.publish != '[]' && github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tested
+          path: |
+            dist/*.digest
+            dist/sbom-*.json
+            images/*/*.lock.json
+          retention-days: 7
+
+  publish:
+    needs: check
+    if: ${{ !cancelled() && needs.check.outputs.publish != '' && needs.check.outputs.publish != '[]' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    name: publish ${{ matrix.image }} ${{ matrix.flavor }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.check.outputs.publish) }}
+    env:
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tested
+
+      - run: scripts/install-tools.sh apko cosign
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push, sign, attest
         id: push
         run: scripts/publish.sh push ${{ matrix.image }} ${{ matrix.flavor }}
 
-      - name: Build provenance
-        if: steps.push.outputs.published == 'true'
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ steps.push.outputs.repository }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-      - name: Promote ${{ matrix.flavor }} tag
-        if: steps.push.outputs.published == 'true'
+      - name: Move ${{ matrix.flavor }} tag
         run: scripts/publish.sh promote ${{ matrix.image }} ${{ matrix.flavor }} "${{ steps.push.outputs.digest }}"

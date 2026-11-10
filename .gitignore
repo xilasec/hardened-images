@@ -19,3 +19,6 @@ tmp/
 
 # melange signing key: CI uses the MELANGE_SIGNING_KEY secret
 melange/xilasec@hardned-images.rsa
+
+# Lockfiles are generated per run and attested to the published image
+images/*/*.lock.json

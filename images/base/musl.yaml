@@ -5,3 +5,7 @@ contents:
   packages:
     - musl
     - ca-certificates-bundle
+
+annotations:
+  org.opencontainers.image.title: base
+  org.opencontainers.image.description: "Minimal musl runtime: libc and CA bundle, no shell"

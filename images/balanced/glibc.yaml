@@ -10,3 +10,7 @@ contents:
 
 entrypoint:
   command: /bin/sh
+
+annotations:
+  org.opencontainers.image.title: balanced
+  org.opencontainers.image.description: "Hardened busybox shell on glibc"
